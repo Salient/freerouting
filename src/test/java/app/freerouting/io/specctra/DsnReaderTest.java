@@ -142,6 +142,94 @@ class DsnReaderTest {
         "Board must not be null when a shapeless padstack is tolerated");
   }
 
+  // Malformed-but-recoverable constructs that sloppy CAD exporters emit. Each used to abort the
+  // parse (or crash); they must now load successfully with a warning and a sensible default.
+
+  /**
+   * Builds a minimal but complete, parseable DSN file. {@code resolutionLine} and {@code extras}
+   * let individual tests inject the malformation under test.
+   */
+  private static String dsn(String resolutionLine, String extras) {
+    return "(pcb test\n"
+        + "  (parser (string_quote \"))\n"
+        + "  " + resolutionLine + "\n"
+        + "  (unit um)\n"
+        + "  (structure\n"
+        + "    (layer F.Cu (type signal) (property (index 0)))\n"
+        + "    (layer B.Cu (type signal) (property (index 1)))\n"
+        + "    (boundary (path pcb 0  0 0  100000 0  100000 100000  0 100000  0 0))\n"
+        + extras
+        + "  )\n"
+        + ")\n";
+  }
+
+  private static BoardReadResult read(String dsn) {
+    return DsnReader.readBoard(
+        new ByteArrayInputStream(dsn.getBytes(StandardCharsets.UTF_8)), null, null);
+  }
+
+  @Test
+  void readBoardToleratesZeroResolution() {
+    // resolution is used as a divisor in coordinate transforms; 0 must not corrupt the board.
+    BoardReadResult result = read(dsn("(resolution um 0)", ""));
+    assertInstanceOf(BoardReadResult.Success.class, result,
+        "A resolution of 0 must be defaulted, not abort the parse");
+  }
+
+  @Test
+  void readBoardToleratesUnknownUnit() {
+    BoardReadResult result = read(dsn("(resolution parsecs 10)", ""));
+    assertInstanceOf(BoardReadResult.Success.class, result,
+        "An unrecognised unit must default to mil, not abort the parse");
+  }
+
+  @Test
+  void readBoardToleratesNonNumericRuleWidth() {
+    // (width foo) — a value carrying a stray unit suffix used to NPE on unboxing in next_double().
+    BoardReadResult result = read(dsn("(resolution um 10)",
+        "    (rule (width foo) (clearance 8.0))\n"));
+    assertInstanceOf(BoardReadResult.Success.class, result,
+        "A non-numeric rule width must be skipped, not crash the parse");
+  }
+
+  @Test
+  void readBoardToleratesPinWithoutClearanceClass() {
+    // A bare (pin <name>) inside a (place ...) with no (clearance_class ...) used to discard the
+    // entire component placement. The component must survive.
+    String extras = "";
+    String dsn = "(pcb test\n"
+        + "  (parser (string_quote \"))\n"
+        + "  (resolution um 10)\n"
+        + "  (unit um)\n"
+        + "  (structure\n"
+        + "    (layer F.Cu (type signal) (property (index 0)))\n"
+        + "    (layer B.Cu (type signal) (property (index 1)))\n"
+        + "    (boundary (path pcb 0  0 0  100000 0  100000 100000  0 100000  0 0))\n"
+        + "  )\n"
+        + "  (placement\n"
+        + "    (component CMP\n"
+        + "      (place C1 50000 50000 front 0\n"
+        + "        (pin P1)\n"   // no (clearance_class ...) sub-scope
+        + "      )\n"
+        + "    )\n"
+        + "  )\n"
+        + "  (library\n"
+        + "    (image CMP\n"
+        + "      (pin RoundPad P1 0 0)\n"
+        + "    )\n"
+        + "    (padstack RoundPad\n"
+        + "      (shape (circle F.Cu 200 0 0))\n"
+        + "    )\n"
+        + "  )\n"
+        + "  (network\n"
+        + "    (net GND (pins C1-P1))\n"
+        + "  )\n"
+        + ")\n";
+    BoardReadResult result = read(dsn);
+    assertInstanceOf(BoardReadResult.Success.class, result,
+        "A pin without a clearance class must not drop its component or abort the parse");
+  }
+
   // Sealed-switch exhaustiveness check (compile-time guarantee)
 
   @Test

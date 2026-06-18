@@ -732,19 +732,27 @@ public class Network extends ScopeKeyword {
     for (PartLibrary.LogicalPart next_part : p_par.logical_parts) {
       Package lib_package = search_lib_package(next_part.name, p_par.logical_part_mappings, routing_board);
       if (lib_package == null) {
-        return false;
+        // Logical parts are optional pin/gate-swap metadata. A missing package mapping must not
+        // abort the parse (the board, nets and components are already built); skip this part.
+        FRLogger.warn("Network.insert_logical_parts: skipping logical part '" + next_part.name + "' because its package mapping was not found.");
+        continue;
       }
       LogicalPart.PartPin[] board_part_pins = new LogicalPart.PartPin[next_part.part_pins.size()];
       int curr_index = 0;
+      boolean part_ok = true;
       for (PartLibrary.PartPin curr_part_pin : next_part.part_pins) {
         int pin_no = lib_package.get_pin_no(curr_part_pin.pin_name);
         if (pin_no < 0) {
-          FRLogger.warn("Network.insert_logical_parts: package pin not found at '" + curr_part_pin.pin_name + "'");
-          return false;
+          FRLogger.warn("Network.insert_logical_parts: skipping logical part '" + next_part.name + "' because it references unknown pin '" + curr_part_pin.pin_name + "'.");
+          part_ok = false;
+          break;
         }
         board_part_pins[curr_index] = new LogicalPart.PartPin(pin_no, curr_part_pin.pin_name, curr_part_pin.gate_name, curr_part_pin.gate_swap_code, curr_part_pin.gate_pin_name,
             curr_part_pin.gate_pin_swap_code);
         ++curr_index;
+      }
+      if (!part_ok) {
+        continue;
       }
       routing_board.library.logical_parts.add(next_part.name, board_part_pins);
     }
@@ -1012,10 +1020,12 @@ public class Network extends ScopeKeyword {
           read_net_scope(p_par.scanner, p_par.netlist, p_par.board_handling.get_routing_board(), p_par.coordinate_transform, p_par.layer_structure);
         } else if (next_token == Keyword.VIA) {
           ViaInfo curr_via_info = read_via_info(p_par.scanner, p_par.board_handling.get_routing_board());
-          if (curr_via_info == null) {
-            return false;
+          // A via referencing an unknown/shapeless padstack yields null. The via-info list is
+          // optional (insert_via_infos falls back to defaults when empty), so skip the bad entry
+          // instead of aborting the whole network parse.
+          if (curr_via_info != null) {
+            via_infos.add(curr_via_info);
           }
-          via_infos.add(curr_via_info);
         } else if (next_token == Keyword.VIA_RULE) {
           Collection<String> curr_via_rule = read_via_rule(p_par.scanner, p_par.board_handling.get_routing_board());
           if (curr_via_rule == null) {

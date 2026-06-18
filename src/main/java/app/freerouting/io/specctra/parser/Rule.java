@@ -102,7 +102,14 @@ public abstract class Rule {
   }
 
   public static WidthRule read_width_rule(IJFlexScanner p_scanner) {
-    double value = p_scanner.next_double();
+    // next_double() returns null when the token is not a number (e.g. a value carrying a stray unit
+    // suffix). Guard against it: assigning null to a primitive double would throw an NPE that aborts
+    // the whole parse. Returning null here lets the caller skip this malformed rule.
+    Double value = p_scanner.next_double();
+    if (value == null) {
+      FRLogger.warn("Rule.read_width_rule: numeric value expected at '" + p_scanner.get_scope_identifier() + "'");
+      return null;
+    }
 
     if (!p_scanner.next_closing_bracket()) {
       return null;
@@ -243,7 +250,12 @@ public abstract class Rule {
 
   public static ClearanceRule read_clearance_rule(IJFlexScanner p_scanner) {
     try {
-      double value = p_scanner.next_double();
+      // See read_width_rule: a non-numeric clearance value would otherwise NPE on unboxing.
+      Double value = p_scanner.next_double();
+      if (value == null) {
+        FRLogger.warn("Rule.read_clearance_rule: numeric value expected at '" + p_scanner.get_scope_identifier() + "'");
+        return null;
+      }
 
       Collection<String> class_pairs = new LinkedList<>();
       Object next_token = p_scanner.next_token();

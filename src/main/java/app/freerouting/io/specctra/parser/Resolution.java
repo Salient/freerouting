@@ -38,8 +38,10 @@ public class Resolution extends ScopeKeyword {
       }
       p_par.unit = Unit.from_string((String) next_token);
       if (p_par.unit == null) {
-        FRLogger.warn("Resolution.read_scope: unit mil, inch or mm expected at '" + p_par.scanner.get_scope_identifier() + "'");
-        return false;
+        // An unrecognised unit string should not abort the whole parse. Default to mil (the SPECCTRA
+        // default) and keep going; the integer value and closing bracket are still consumed below.
+        FRLogger.warn("Resolution.read_scope: unrecognised unit '" + next_token + "'; defaulting to mil at '" + p_par.scanner.get_scope_identifier() + "'");
+        p_par.unit = Unit.MIL;
       }
       // read the scale factor
       next_token = p_par.scanner.next_token();
@@ -47,7 +49,15 @@ public class Resolution extends ScopeKeyword {
         FRLogger.warn("Resolution.read_scope: integer expected at '" + p_par.scanner.get_scope_identifier() + "'");
         return false;
       }
-      p_par.resolution = (Integer) next_token;
+      int resolution_value = (Integer) next_token;
+      if (resolution_value <= 0) {
+        // The resolution is used as a divisor in coordinate transforms; a value of 0 (or negative)
+        // would produce Infinity/NaN coordinates and silently corrupt the whole board. Fall back to
+        // the SPECCTRA default of 100 instead.
+        FRLogger.warn("Resolution.read_scope: resolution must be positive, got " + resolution_value + "; defaulting to 100 at '" + p_par.scanner.get_scope_identifier() + "'");
+        resolution_value = 100;
+      }
+      p_par.resolution = resolution_value;
       // overread the closing bracket
       next_token = p_par.scanner.next_token();
       if (next_token != CLOSED_BRACKET) {

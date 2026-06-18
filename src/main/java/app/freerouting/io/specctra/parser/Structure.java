@@ -745,9 +745,28 @@ public class Structure extends ScopeKeyword {
     return true;
   }
 
+  /**
+   * Adds the result of a Shape.read_area_scope call to a list, skipping it if the read failed
+   * (returned null). A null entry would otherwise cause a NullPointerException later in
+   * insert_keepout when its shape_list is dereferenced.
+   */
+  private static void add_if_not_null(Collection<Shape.ReadAreaScopeResult> p_list, Shape.ReadAreaScopeResult p_area) {
+    if (p_area != null) {
+      p_list.add(p_area);
+    } else {
+      FRLogger.warn("Structure.read_scope: skipping a keepout area that could not be parsed.");
+    }
+  }
+
   private static boolean insert_keepout(Shape.ReadAreaScopeResult p_area, ReadScopeParameter p_par,
       KeepoutType p_keepout_type, FixedState p_fixed_state) {
     Area keepout_area = Shape.transform_area_to_board(p_area.shape_list, p_par.coordinate_transform);
+    if (keepout_area == null) {
+      // The shape could not be transformed (e.g. an empty shape list or a non-polyline boundary).
+      // The keepout is non-essential, so skip it and keep parsing rather than aborting the board.
+      FRLogger.warn("Structure.insert_keepout: keepout '" + p_area.area_name + "' has no usable shape and was skipped.");
+      return true;
+    }
     if (keepout_area.dimension() < 2) {
       // A degenerate keepout (e.g. all polygon vertices identical, exported incorrectly by the EDA
       // tool) cannot be enforced as a routing constraint. The board remains valid — the keepout
@@ -846,22 +865,27 @@ public class Structure extends ScopeKeyword {
         } else if (next_token == Keyword.VIA) {
           p_par.via_padstack_names = read_via_padstacks(p_par.scanner);
         } else if (next_token == Keyword.RULE) {
-          board_construction_info.default_rules.addAll(Rule.read_scope(p_par.scanner));
+          // Rule.read_scope returns null on a truncated/IO-broken rule scope; addAll(null) would NPE.
+          Collection<Rule> parsed_rules = Rule.read_scope(p_par.scanner);
+          if (parsed_rules != null) {
+            board_construction_info.default_rules.addAll(parsed_rules);
+          }
         } else if (next_token == Keyword.KEEPOUT) {
           if (p_par.layer_structure == null) {
             p_par.layer_structure = new LayerStructure(board_construction_info.layer_info);
           }
-          keepout_list.add(Shape.read_area_scope(p_par.scanner, p_par.layer_structure, false));
+          // A malformed keepout shape yields null; adding it would later NPE in insert_keepout.
+          add_if_not_null(keepout_list, Shape.read_area_scope(p_par.scanner, p_par.layer_structure, false));
         } else if (next_token == Keyword.VIA_KEEPOUT) {
           if (p_par.layer_structure == null) {
             p_par.layer_structure = new LayerStructure(board_construction_info.layer_info);
           }
-          via_keepout_list.add(Shape.read_area_scope(p_par.scanner, p_par.layer_structure, false));
+          add_if_not_null(via_keepout_list, Shape.read_area_scope(p_par.scanner, p_par.layer_structure, false));
         } else if (next_token == Keyword.PLACE_KEEPOUT) {
           if (p_par.layer_structure == null) {
             p_par.layer_structure = new LayerStructure(board_construction_info.layer_info);
           }
-          place_keepout_list.add(Shape.read_area_scope(p_par.scanner, p_par.layer_structure, false));
+          add_if_not_null(place_keepout_list, Shape.read_area_scope(p_par.scanner, p_par.layer_structure, false));
         } else if (next_token == Keyword.PLANE_SCOPE) {
           if (p_par.layer_structure == null) {
             p_par.layer_structure = new LayerStructure(board_construction_info.layer_info);

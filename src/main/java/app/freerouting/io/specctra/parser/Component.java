@@ -276,8 +276,12 @@ public class Component extends ScopeKeyword {
       return null;
     }
     if (cl_class_name == null) {
-      FRLogger.warn("Component.read_item_clearance_info: clearance class name not found at '" + p_scanner.get_scope_identifier() + "'");
-      return null;
+      // No explicit (clearance_class ...) sub-scope. Some CAD tools (e.g. Altium) emit a bare
+      // (pin <name>) when the default clearance applies. Returning null here would discard the
+      // entire component placement, losing all of its pins from the netlist. Use an empty class
+      // name instead; downstream lookup (clearance_matrix.get_no) returns -1 for it and the caller
+      // falls back to the default SMD/PIN clearance class.
+      cl_class_name = "";
     }
     return new ComponentPlacement.ItemClearanceInfo(name, cl_class_name);
   }
