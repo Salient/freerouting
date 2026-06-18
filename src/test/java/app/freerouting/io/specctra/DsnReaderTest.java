@@ -96,6 +96,52 @@ class DsnReaderTest {
         "empty_board.dsn has a valid boundary and must succeed");
   }
 
+  // Shapeless-padstack path — some CAD tools (e.g. Altium) export padstacks with no (shape ...)
+  // scope for mounting holes / NPTH / fiducials. A component pin referencing such a padstack used
+  // to abort the whole parse ("DSN structure parsing failed"). It must now load successfully, with
+  // the shapeless pin simply skipped during board item insertion.
+
+  private static final String DSN_EMPTY_PADSTACK =
+      "(pcb test\n"
+          + "  (parser (string_quote \"))\n"
+          + "  (resolution um 10)\n"
+          + "  (unit um)\n"
+          + "  (structure\n"
+          + "    (layer F.Cu (type signal) (property (index 0)))\n"
+          + "    (layer B.Cu (type signal) (property (index 1)))\n"
+          + "    (boundary (path pcb 0  0 0  100000 0  100000 100000  0 100000  0 0))\n"
+          + "  )\n"
+          + "  (placement\n"
+          + "    (component MOUNT\n"
+          + "      (place H1 50000 50000 front 0)\n"
+          + "    )\n"
+          + "  )\n"
+          + "  (library\n"
+          + "    (image MOUNT\n"
+          + "      (pin EmptyPad 1 0 0)\n"
+          + "    )\n"
+          + "    (padstack EmptyPad\n"   // no (shape ...) — the Altium failure mode
+          + "    )\n"
+          + "  )\n"
+          + "  (network\n"
+          + "    (net GND\n"
+          + "      (pins H1-1)\n"
+          + "    )\n"
+          + "  )\n"
+          + ")\n";
+
+  @Test
+  void readBoardSucceedsWhenPinReferencesShapelessPadstack() {
+    InputStream in = new ByteArrayInputStream(DSN_EMPTY_PADSTACK.getBytes(StandardCharsets.UTF_8));
+    BoardReadResult result = DsnReader.readBoard(in, null, null);
+
+    assertInstanceOf(BoardReadResult.Success.class, result,
+        "A pin referencing a shapeless padstack must not abort the parse; "
+            + "the shapeless pin should be skipped and the board loaded");
+    assertNotNull(((BoardReadResult.Success) result).board(),
+        "Board must not be null when a shapeless padstack is tolerated");
+  }
+
   // Sealed-switch exhaustiveness check (compile-time guarantee)
 
   @Test

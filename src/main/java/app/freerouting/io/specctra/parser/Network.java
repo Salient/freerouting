@@ -836,6 +836,14 @@ public class Network extends ScopeKeyword {
         FRLogger.warn("Network.insert_component: pin padstack not found at '" + p_par.scanner.get_scope_identifier() + "'");
         return;
       }
+      if (curr_padstack.is_empty()) {
+        // Shapeless padstack (e.g. an Altium mounting hole / NPTH / fiducial). It carries no copper
+        // on any layer, so there is nothing to insert as a board item. Skip this pin instead of
+        // letting the empty shape array reach the shape search tree, where the negative layer count
+        // would throw a NegativeArraySizeException.
+        FRLogger.warn("Network.insert_component: skipping pin '" + curr_pin.name + "' of component '" + new_component.name + "' because its padstack '" + curr_padstack.name + "' has no shape.");
+        continue;
+      }
       Collection<Net> pin_nets = p_par.netlist.get_nets(p_location.name, curr_pin.name);
       Collection<Integer> net_numbers = new LinkedList<>();
       for (Net curr_pin_net : pin_nets) {

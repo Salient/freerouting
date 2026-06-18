@@ -144,7 +144,13 @@ public class Library extends ScopeKeyword {
       return true;
     }
     if (shape_list.isEmpty()) {
-      FRLogger.warn("Library.read_padstack_scope: shape not found for padstack with name '" + padstack_name + "'");
+      // Some CAD tools (e.g. Altium) export shapeless padstacks for mounting holes, non-plated
+      // through holes or fiducials. Register the padstack with an all-null shape array so that pins
+      // referencing it can still be resolved; it will be skipped during board item insertion
+      // because it carries no copper. Previously these were dropped, which aborted the whole parse
+      // as soon as a pin referenced one.
+      FRLogger.warn("Library.read_padstack_scope: padstack '" + padstack_name + "' has no shape; registering it as an empty (no-copper) padstack.");
+      p_board_padstacks.add(padstack_name, new ConvexShape[p_layer_structure.arr.length], is_drilllable, placed_absolute);
       return true;
     }
     ConvexShape[] padstack_shapes = new ConvexShape[p_layer_structure.arr.length];
@@ -243,7 +249,9 @@ public class Library extends ScopeKeyword {
         Vector rel_coor = new IntVector(rel_x, rel_y);
         Padstack board_padstack = board.library.padstacks.get(pin_info.padstack_name);
         if (board_padstack == null) {
-          FRLogger.warn("Library.read_scope: board padstack not found at '" + p_par.scanner.get_scope_identifier() + "'");
+          // Report the padstack that is actually missing (and the image/pin referencing it) rather
+          // than the scanner's last scope identifier, which points at the final padstack read.
+          FRLogger.warn("Library.read_scope: board padstack '" + pin_info.padstack_name + "' referenced by pin '" + pin_info.pin_name + "' of image '" + curr_package.name + "' not found.");
           return false;
         }
         pin_arr[i] = new app.freerouting.core.Package.Pin(pin_info.pin_name, board_padstack.no, rel_coor, pin_info.rotation);

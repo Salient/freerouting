@@ -148,6 +148,18 @@ public class Padstack implements Comparable<Padstack>, ObjectInfoPanel.Printable
   }
 
   /**
+   * Returns true if this padstack has no shape on any layer. Such padstacks occur in DSN files
+   * exported by some CAD tools (e.g. Altium) for mounting holes, non-plated through holes or
+   * fiducials that carry no copper. They are registered so that pins referencing them can still be
+   * resolved, but they must not be inserted as routable items on the board: with an all-null shape
+   * array, from_layer() returns shapes.length and to_layer() returns -1, so the layer count
+   * (to_layer() - from_layer() + 1) is negative and would crash the shape search tree.
+   */
+  public boolean is_empty() {
+    return from_layer() > to_layer();
+  }
+
+  /**
    * Returns the layer count of the board of this padstack.
    */
   public int board_layer_count() {
