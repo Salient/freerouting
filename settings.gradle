@@ -1,5 +1,7 @@
-plugins {
-    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.8.0'
-}
+// The foojay-resolver-convention plugin only supplies toolchain auto-download
+// repositories. We don't declare a Java toolchain (see build.gradle), so it's
+// unused — and version 0.8.0 crashes on Gradle 9.5
+// (NoSuchFieldError: JvmVendorSpec.IBM_SEMERU). Re-add it only if a toolchain
+// spec is reintroduced, pinned to a Gradle 9-compatible version.
 
 rootProject.name = 'freerouting'

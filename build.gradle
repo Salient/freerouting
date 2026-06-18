@@ -19,9 +19,12 @@ java {
     targetCompatibility = JavaVersion.VERSION_25
 }
 
-java.toolchain {
-    languageVersion = JavaLanguageVersion.of(25)
-}
+// No java.toolchain block on purpose: Gradle compiles with the JVM that runs
+// it. CI pins that to JDK 25 via actions/setup-java. A toolchain spec would
+// instead make Gradle hunt for an installed JDK 25 and, failing that, try to
+// download one through the foojay resolver — which (a) misclassifies some
+// JDK 25 installs as JREs and rejects them, and (b) crashes on Gradle 9.5.
+// sourceCompatibility/targetCompatibility above still enforce Java 25 output.
 
 [compileJava, compileTestJava]*.options*.encoding = 'UTF-8'
 
