@@ -504,7 +504,12 @@ public class HeadlessBoardManager implements BoardManager {
       }
 
       if (this.board != null) {
-        var boardStats = new BoardStatistics(this.board);
+        // Skip the clearance-violation DRC here: it is an expensive O(items x neighbours) geometry
+        // pass and this BoardStatistics is only used for load-time analytics, which does not read
+        // the violation count. On the GUI load path this runs on the Swing EDT, so including it
+        // freezes the UI right after a successful parse. The violation count is still computed
+        // later, during/after routing, where it is actually consumed.
+        var boardStats = new BoardStatistics(this.board, null, false);
         FRAnalytics.fileLoaded("DSN", GSON.toJson(boardStats));
         this.board.reduce_nets_of_route_items();
         originalBoardChecksum = calculateCrc32();
@@ -565,7 +570,9 @@ public class HeadlessBoardManager implements BoardManager {
       }
 
       if (this.board != null) {
-        var boardStats = new BoardStatistics(this.board);
+        // See loadFromSpecctraDsn: skip the clearance-violation DRC for load-time analytics so the
+        // GUI EDT is not blocked by it right after the parse.
+        var boardStats = new BoardStatistics(this.board, null, false);
         FRAnalytics.fileLoaded("KICAD_JSON", GSON.toJson(boardStats));
         this.board.reduce_nets_of_route_items();
         originalBoardChecksum = calculateCrc32();
