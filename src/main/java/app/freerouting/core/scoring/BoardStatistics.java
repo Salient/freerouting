@@ -355,7 +355,9 @@ public class BoardStatistics implements Serializable {
       return;
     }
     // set the statistical data based on the file content
-    if (format == FileFormat.SES) {
+    if (format == FileFormat.SES || format == FileFormat.RTE) {
+      // RTE is the routing-only (routes ...) scope of a SES file, so the same wire/via/net/path
+      // text parsing applies. A route file has no (component scopes, so that count is simply 0.
       // read the content as text
       String content = new String(data, StandardCharsets.UTF_8);
 

@@ -38,6 +38,7 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
   public static final String BINARY_FILE_EXTENSION = "frb";
   private static final String RULES_FILE_EXTENSION = "rules";
   private static final String SES_FILE_EXTENSION = "ses";
+  private static final String RTE_FILE_EXTENSION = "rte";
   private static final String EAGLE_SCRIPT_FILE_EXTENSION = "scr";
 
   @SerializedName("id")
@@ -225,6 +226,7 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
         case DSN_FILE_EXTENSION -> FileFormat.DSN;
         case BINARY_FILE_EXTENSION -> FileFormat.FRB;
         case "ses" -> FileFormat.SES;
+        case RTE_FILE_EXTENSION -> FileFormat.RTE;
         case "scr" -> FileFormat.SCR;
         case "json" -> FileFormat.JSON;
         default -> FileFormat.UNKNOWN;
@@ -334,7 +336,7 @@ public class RoutingJob implements Serializable, Comparable<RoutingJob> {
 
     FileFormat ff = getFileFormat(outputFile.toPath());
 
-    if ((ff == FileFormat.DSN) || (ff == FileFormat.FRB) || (ff == FileFormat.SES) || (ff == FileFormat.SCR)) {
+    if ((ff == FileFormat.DSN) || (ff == FileFormat.FRB) || (ff == FileFormat.SES) || (ff == FileFormat.RTE) || (ff == FileFormat.SCR)) {
       this.output = new BoardFileDetails(outputFile);
       this.output.addUpdatedEventListener(_ -> this.fireInputUpdatedEvent());
       this.output.format = ff;

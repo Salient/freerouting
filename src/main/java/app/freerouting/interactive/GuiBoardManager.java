@@ -2200,6 +2200,25 @@ public class GuiBoardManager extends HeadlessBoardManager {
   }
 
   /**
+   * Writes a Specctra route (.rte) file containing only the routing solution.
+   *
+   * <p>Like the SES export, but without the session wrapper or component placement — for CAD
+   * tools that import results as a routing-only route file.
+   *
+   * @param outputStream the stream to write the route data to
+   * @return true if save succeeded, false otherwise
+   *
+   * @see HeadlessBoardManager#saveAsSpecctraRouteRte
+   */
+  public boolean saveAsSpecctraRouteRte(OutputStream outputStream) {
+    if (board_is_read_only) {
+      return false;
+    }
+
+    return super.saveAsSpecctraRouteRte(outputStream);
+  }
+
+  /**
    * Converts a Specctra session file to an Eagle script (.SCR) format.
    *
    * <p>This allows routing results to be imported into Autodesk Eagle PCB software

@@ -625,6 +625,15 @@ public class AutorouterAndRouteOptimizerThread extends InteractiveActionThread {
         } catch (Exception e) {
           routingJob.logError("Couldn't save the output into the job object.", e);
         }
+      } else if (routingJob.output.format == FileFormat.RTE) {
+        // Save the routing-only RTE file after the auto-router has finished
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+          if (boardManager.saveAsSpecctraRouteRte(baos)) {
+            routingJob.output.setData(baos.toByteArray());
+          }
+        } catch (Exception e) {
+          routingJob.logError("Couldn't save the output into the job object.", e);
+        }
       }
 
       // Update the ratsnest

@@ -18,6 +18,7 @@ import app.freerouting.geometry.planar.PolylineShape;
 import app.freerouting.io.BoardReadResult;
 import app.freerouting.io.specctra.DsnReader;
 import app.freerouting.io.specctra.DsnWriter;
+import app.freerouting.io.specctra.RteWriter;
 import app.freerouting.io.specctra.SesWriter;
 import app.freerouting.io.kicad.KiCadJsonReader;
 import app.freerouting.logger.FRLogger;
@@ -635,6 +636,38 @@ public class HeadlessBoardManager implements BoardManager {
       wasSaveSuccessful = true;
     } catch (IOException e) {
       FRLogger.error("unable to write session file", e);
+      wasSaveSuccessful = false;
+    }
+
+    if (wasSaveSuccessful) {
+      originalBoardChecksum = calculateCrc32();
+    }
+
+    return wasSaveSuccessful;
+  }
+
+  /**
+   * Writes the routing result as a Specctra route (.rte) file.
+   *
+   * <p>Unlike {@link #saveAsSpecctraSessionSes}, a route file contains only the routing solution
+   * (a top-level {@code (routes ...)} scope) without the session wrapper or component placement.
+   * Some CAD tools import results in this routing-only form.
+   *
+   * <p><strong>Note:</strong> The output stream is NOT closed by this method.
+   * The caller is responsible for closing it.
+   *
+   * @param outputStream the stream to write RTE data to (caller must close)
+   * @return true if save was successful, false if an error occurred
+   *
+   * @see RteWriter#write
+   */
+  public boolean saveAsSpecctraRouteRte(OutputStream outputStream) {
+    boolean wasSaveSuccessful;
+    try {
+      RteWriter.write(this.get_routing_board(), outputStream);
+      wasSaveSuccessful = true;
+    } catch (IOException e) {
+      FRLogger.error("unable to write route file", e);
       wasSaveSuccessful = false;
     }
 

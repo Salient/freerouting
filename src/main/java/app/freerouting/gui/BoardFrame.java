@@ -277,6 +277,11 @@ public class BoardFrame extends WindowBase {
           }
           FRAnalytics.buttonClicked("fileio_saveses", this.routingJob.getOutputFileDetails());
           break;
+        case RTE:
+          // Save the file as a Specctra routing-only RTE file
+          this.saveAsSpecctraRouteRte(this.routingJob.output.getFile());
+          FRAnalytics.buttonClicked("fileio_saverte", this.routingJob.getOutputFileDetails());
+          break;
         case DSN:
           // Save the file as a Specctra DSN file
           this.saveAsSpecctraDesignDsn(this.routingJob.output.getFile(), this.routingJob.input.getFilename(), false);
@@ -683,6 +688,33 @@ public class BoardFrame extends WindowBase {
     return true;
   }
 
+  /**
+   * Writes a Specctra Route File (RTE) containing only the routing solution (no session wrapper or
+   * placement). Returns false if the write operation fails.
+   */
+  public boolean saveAsSpecctraRouteRte(File outputFile) {
+    if (outputFile == null) {
+      return false;
+    }
+
+    FRLogger.info("Saving '" + outputFile.getPath() + "'...");
+    OutputStream output_stream;
+    try {
+      output_stream = new FileOutputStream(outputFile);
+    } catch (Exception _) {
+      output_stream = null;
+    }
+
+    if (!board_panel.board_handling.saveAsSpecctraRouteRte(output_stream)) {
+      this.screen_messages.set_status_message(tm.getText("message_specctra_rte_save_failed", outputFile.getPath()));
+      return false;
+    }
+
+    this.screen_messages.set_status_message(tm.getText("message_specctra_rte_saved", outputFile.getPath()));
+
+    return true;
+  }
+
   public File showSaveAsDialog(String p_default_directory, BoardFileDetails output) {
     var p_parent = this;
 
@@ -701,6 +733,10 @@ public class BoardFrame extends WindowBase {
     FileNameExtensionFilter sesFilter = new FileNameExtensionFilter("SPECCTRA Session file (*.ses)", "ses");
     fileChooser.addChoosableFileFilter(sesFilter);
 
+    // Add the file filter for SPECCTRA Route .RTE files (routing only)
+    FileNameExtensionFilter rteFilter = new FileNameExtensionFilter("SPECCTRA Route file (*.rte)", "rte");
+    fileChooser.addChoosableFileFilter(rteFilter);
+
     // Add the file filter for Freerouting binary .FRB files
     FileNameExtensionFilter frbFilter = new FileNameExtensionFilter("Freerouting binary file (*.frb)", "frb");
     fileChooser.addChoosableFileFilter(frbFilter);
@@ -717,6 +753,9 @@ public class BoardFrame extends WindowBase {
     switch (output.format) {
       case SES:
         fileChooser.setFileFilter(sesFilter);
+        break;
+      case RTE:
+        fileChooser.setFileFilter(rteFilter);
         break;
       case FRB:
         fileChooser.setFileFilter(frbFilter);

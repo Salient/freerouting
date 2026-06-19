@@ -189,6 +189,9 @@ public class BoardFileDetails implements Serializable {
         case SES:
           extension = "ses";
           break;
+        case RTE:
+          extension = "rte";
+          break;
         case DSN:
           extension = "dsn";
           break;

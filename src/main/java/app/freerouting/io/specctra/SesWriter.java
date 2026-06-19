@@ -84,8 +84,40 @@ public final class SesWriter {
     file.write(")");
     writePlacement(board, identifierType, coordinateTransform, file);
     writeWasIs(board, identifierType, file);
-    writeRoutes(board, identifierType, coordinateTransform, file);
+    writeRoutes(board, identifierType, coordinateTransform, file, false);
     file.end_scope();
+  }
+
+  /**
+   * Writes a stand-alone Specctra {@code (routes ...)} scope (resolution, parser, library_out and
+   * network_out) as the <em>top-level</em> scope of the stream — i.e. the routing solution without
+   * the surrounding {@code (session ...)} wrapper, placement or {@code was_is} data.
+   *
+   * <p>This is the payload of a Specctra <em>route</em> ({@code .rte}) file. The routing content is
+   * serialised by the exact same code path as {@link #write}, so a {@code .rte} file and the
+   * {@code (routes ...)} scope inside the corresponding {@code .ses} file are byte-for-byte
+   * identical.
+   *
+   * <p>The stream is flushed but not closed; the caller retains ownership.
+   *
+   * @param board the board whose routing data is serialised (must not be {@code null})
+   * @param out   target stream (caller owns lifecycle; must not be {@code null})
+   * @throws IOException if an I/O error occurs during writing
+   * @see RteWriter
+   */
+  static void writeRoutesOnly(BasicBoard board, OutputStream out) throws IOException {
+    if (out == null) {
+      throw new IOException("SesWriter: output stream must not be null");
+    }
+    IndentFileWriter outputFile = new IndentFileWriter(out);
+    String[] reservedChars = {"(", ")", " ", ";", "-", "_", "/", "~", "{", "}"};
+    IdentifierType identifierType = new IdentifierType(reservedChars,
+        board.communication.specctra_parser_info.string_quote);
+    double scaleFactor =
+        board.communication.coordinate_transform.dsn_to_board(1) / board.communication.resolution;
+    CoordinateTransform coordinateTransform = new CoordinateTransform(scaleFactor, 0, 0);
+    writeRoutes(board, identifierType, coordinateTransform, outputFile, true);
+    outputFile.flush();
   }
 
   private static void writePlacement(BasicBoard board, IdentifierType identifierType,
@@ -204,8 +236,12 @@ public final class SesWriter {
   }
 
   private static void writeRoutes(BasicBoard board, IdentifierType identifierType,
-      CoordinateTransform coordinateTransform, IndentFileWriter file) throws IOException {
-    file.start_scope();
+      CoordinateTransform coordinateTransform, IndentFileWriter file, boolean topLevel)
+      throws IOException {
+    // When this is the top-level scope of the file (a .rte route file) it must open without a
+    // leading new-line, exactly like the (session ...) scope does. When it is nested inside a
+    // (session ...) scope, start_scope() prepends the usual indenting new-line.
+    file.start_scope(!topLevel);
     file.write("routes ");
     Resolution.write_scope(file, board.communication);
     Parser.write_scope(file, board.communication.specctra_parser_info, identifierType, true);

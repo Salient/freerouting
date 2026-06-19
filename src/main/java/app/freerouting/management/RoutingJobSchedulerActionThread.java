@@ -288,6 +288,18 @@ public class RoutingJobSchedulerActionThread extends StoppableThread {
       } catch (Exception e) {
         FRLogger.error("Couldn't save the SES output into the job object.", e);
       }
+    } else if (job.output.format == FileFormat.RTE) {
+      HeadlessBoardManager boardManager = new HeadlessBoardManager(job);
+      boardManager.replaceRoutingBoard(job.board);
+
+      // Save the RTE (routing-only) file after the auto-router has finished
+      try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+        if (boardManager.saveAsSpecctraRouteRte(baos)) {
+          job.output.setData(baos.toByteArray());
+        }
+      } catch (Exception e) {
+        FRLogger.error("Couldn't save the RTE output into the job object.", e);
+      }
     }
   }
 
