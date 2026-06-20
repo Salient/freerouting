@@ -1120,6 +1120,19 @@ public class BoardHandling extends BoardHandlingImpl
     }
 
     /**
+     * Writes a route file in the Specctra rte-format (the routing solution only, without the
+     * session wrapper, placement or was_is data).
+     */
+    public boolean export_specctra_route_file(String p_design_name, OutputStream p_output_stream)
+    {
+        if (board_is_read_only)
+        {
+            return false;
+        }
+        return SessionFile.write_route_file(this.get_routing_board(), p_output_stream, p_design_name);
+    }
+
+    /**
      * Saves the currently edited board design to p_design_file.
      */
     public boolean save_design_file(java.io.ObjectOutputStream p_object_stream)

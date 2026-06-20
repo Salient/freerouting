@@ -129,6 +129,7 @@ public class MainApplication extends javax.swing.JFrame
                         if ((filename != null)
                                 && ((filename.toLowerCase().endsWith(".dsn"))
                                 || (filename.toLowerCase().endsWith(".ses"))
+                                || (filename.toLowerCase().endsWith(".rte"))
                                 || (filename.toLowerCase().endsWith(".scr")))) {
 
                             FRLogger.info("Saving '" + filename + "'...");
@@ -142,6 +143,8 @@ public class MainApplication extends javax.swing.JFrame
                                     new_frame.board_panel.board_handling.export_to_dsn_file(output_stream, design_name, false);
                                 } else if (filename.toLowerCase().endsWith(".ses")) {
                                     new_frame.board_panel.board_handling.export_specctra_session_file(design_name, output_stream);
+                                } else if (filename.toLowerCase().endsWith(".rte")) {
+                                    new_frame.board_panel.board_handling.export_specctra_route_file(design_name, output_stream);
                                 } else if (filename.toLowerCase().endsWith(".scr")) {
                                     java.io.ByteArrayOutputStream session_output_stream = new ByteArrayOutputStream();
                                     new_frame.board_panel.board_handling.export_specctra_session_file(filename, session_output_stream);

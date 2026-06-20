@@ -87,6 +87,58 @@ public class SessionFile
         return true;
     }
     
+    /**
+     * Creates a Specctra route (.rte) file from the RoutingBoard.
+     *
+     * A route file carries only the routing solution as a top-level (routes ...) scope
+     * (resolution, parser, library_out, network_out), without the (session ...) wrapper, component
+     * placement or was_is data that a session (.ses) file adds. Some host CAD tools import routing
+     * results as .rte rather than .ses. The (routes ...) payload is written by the exact same code
+     * path as write(...), so the two formats cannot drift apart.
+     */
+    public static boolean write_route_file(BasicBoard p_board, java.io.OutputStream p_output_stream, String p_design_name)
+    {
+        if (p_output_stream == null)
+        {
+            return false;
+        }
+        IndentFileWriter output_file = null;
+        try
+        {
+            output_file = new IndentFileWriter(p_output_stream);
+        }
+        catch (Exception e)
+        {
+            FRLogger.error("unable to create route file", e);
+            return false;
+        }
+        try
+        {
+            String [] reserved_chars = {"(", ")", " ", "-"};
+            IdentifierType identifier_type = new IdentifierType(reserved_chars, p_board.communication.specctra_parser_info.string_quote);
+            double scale_factor = p_board.communication.coordinate_transform.dsn_to_board(1) / p_board.communication.resolution;
+            CoordinateTransform coordinate_transform = new CoordinateTransform(scale_factor, 0, 0);
+            // Write (routes ...) as the top-level scope. IndentFileWriter suppresses the newline
+            // before the very first token, so the file opens directly with '(' just like a session.
+            write_routes(p_board, identifier_type, coordinate_transform, output_file);
+        }
+        catch (java.io.IOException e)
+        {
+            FRLogger.error("unable to write route file", e);
+            return false;
+        }
+        try
+        {
+            output_file.close();
+        }
+        catch (java.io.IOException e)
+        {
+            FRLogger.error("unable to close route file", e);
+            return false;
+        }
+        return true;
+    }
+
     private static void write_session_scope(BasicBoard p_board, IdentifierType p_identifier_type,
             IndentFileWriter p_file, String p_session_name, String p_design_name) throws java.io.IOException
     {

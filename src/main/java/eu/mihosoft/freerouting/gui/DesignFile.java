@@ -247,6 +247,45 @@ public class DesignFile
     }
 
     /**
+     * Writes a Specctra Route File (.rte) to update the design file in the host system.
+     * Unlike a session file, a route file carries only the routing solution (no placement or
+     * rules sidecar), so no rules file is written. Returns false, if the write failed.
+     */
+    public boolean write_specctra_route_file(BoardFrame p_board_frame)
+    {
+        final java.util.ResourceBundle resources =
+                java.util.ResourceBundle.getBundle("eu.mihosoft.freerouting.gui.BoardMenuFile", p_board_frame.get_locale());
+        String design_file_name = this.get_name();
+        String[] file_name_parts = design_file_name.split("\\.", 2);
+        String design_name = file_name_parts[0];
+
+        String output_file_name = design_name + ".rte";
+        FRLogger.info("Saving '"+output_file_name+"'...");
+        java.io.File curr_output_file = new java.io.File(get_parent(), output_file_name);
+        java.io.OutputStream output_stream;
+        try
+        {
+            output_stream = new java.io.FileOutputStream(curr_output_file);
+        } catch (Exception e)
+        {
+            output_stream = null;
+        }
+
+        if (p_board_frame.board_panel.board_handling.export_specctra_route_file(design_file_name, output_stream))
+        {
+            p_board_frame.screen_messages.set_status_message(resources.getString("message_11") + " " +
+                    output_file_name + " " + resources.getString("message_12"));
+            return true;
+        }
+        else
+        {
+            p_board_frame.screen_messages.set_status_message(resources.getString("message_13") + " " +
+                    output_file_name + " " + resources.getString("message_7"));
+            return false;
+        }
+    }
+
+    /**
      * Saves the board rule to file, so that they can be reused later on.
      */
     private boolean write_rules_file(String p_design_name, eu.mihosoft.freerouting.interactive.BoardHandling p_board_handling)
