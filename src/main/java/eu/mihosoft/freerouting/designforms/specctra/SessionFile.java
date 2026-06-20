@@ -198,14 +198,22 @@ public class SessionFile
     public static void write_was_is(BasicBoard p_board, IdentifierType p_identifier_type,
             IndentFileWriter p_file) throws java.io.IOException
     {
-        p_file.start_scope();
-        p_file.write("was_is");
+        // Only emit the was_is scope if at least one pin was actually swapped.
+        // An empty "(was_is)" scope makes strict Specctra readers (Altium) index
+        // element 0 of an empty pin-swap list, raising "List index out of bounds (0)".
+        boolean scope_started = false;
         Collection<eu.mihosoft.freerouting.board.Pin> board_pins = p_board.get_pins();
         for (eu.mihosoft.freerouting.board.Pin curr_pin : board_pins)
         {
             eu.mihosoft.freerouting.board.Pin swapped_with = curr_pin.get_changed_to();
             if (curr_pin.get_changed_to() != curr_pin)
             {
+                if (!scope_started)
+                {
+                    p_file.start_scope();
+                    p_file.write("was_is");
+                    scope_started = true;
+                }
                 p_file.new_line();
                 p_file.write("(pins ");
                 eu.mihosoft.freerouting.board.Component curr_cmp = p_board.components.get(curr_pin.get_component_no());
@@ -236,9 +244,12 @@ public class SessionFile
                 p_file.write(")");
             }
         }
-        p_file.end_scope();
+        if (scope_started)
+        {
+            p_file.end_scope();
+        }
     }
-    
+
     private static void write_routes(BasicBoard p_board, IdentifierType p_identifier_type, CoordinateTransform p_coordinate_transform,
             IndentFileWriter p_file) throws java.io.IOException
     {
@@ -519,7 +530,7 @@ public class SessionFile
         for (int i = 0; i < holes.length; ++i)
         {
             Shape dsn_hole = p_coordinate_transform.board_to_dsn(holes[i], conduction_layer);
-            dsn_hole.write_hole_scope(p_file, p_identifier_type);
+            dsn_hole.write_hole_scope_int(p_file, p_identifier_type);
         }
         p_file.end_scope();
     }

@@ -80,6 +80,14 @@ public class IndentFileWriter extends java.io.OutputStreamWriter
     {
         try
         {
+            // Suppress the newline before the very first token so the file does not
+            // begin with a blank line. A leading empty line before "(session ..." can
+            // desync strict Specctra readers that expect the stream to open with '('.
+            if (!something_written)
+            {
+                something_written = true;
+                return;
+            }
             write("\n");
             for (int i = 0; i < current_indent_level; ++i)
             {
@@ -91,8 +99,9 @@ public class IndentFileWriter extends java.io.OutputStreamWriter
             FRLogger.error("IndentFileWriter.new_line: unable to write to file", e);
         }
     }
-    
+
     private int current_indent_level = 0;
+    private boolean something_written = false;
     
     private static final String INDENT_STRING = "  ";
     private static final String BEGIN_SCOPE = "(";
