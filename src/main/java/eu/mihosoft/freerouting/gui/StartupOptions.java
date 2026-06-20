@@ -18,6 +18,9 @@ public class StartupOptions {
     String design_rules_filename = null;
     String design_input_directory_name = null;
     int max_passes = 99999;
+    // Wall-clock limit for headless batch autorouting, in seconds. <= 0 means no
+    // limit (route until the autorouter finishes or the pass cap is reached).
+    int max_seconds = 0;
     java.util.Locale current_locale = java.util.Locale.ENGLISH;
 
     private StartupOptions() {
@@ -58,6 +61,12 @@ public class StartupOptions {
                 } else if (p_args[i].startsWith("-mp")) {
                     if (p_args.length > i + 1 && !p_args[i + 1].startsWith("-")) {
                         max_passes = Integer.decode(p_args[i + 1]);
+                    }
+                } else if (p_args[i].startsWith("-mt")) {
+                    // maximum autorouting time in seconds (headless); requests a clean
+                    // stop after the interval, then the routed-so-far board is exported.
+                    if (p_args.length > i + 1 && !p_args[i + 1].startsWith("-")) {
+                        max_seconds = Integer.decode(p_args[i + 1]);
                     }
                 } else if (p_args[i].startsWith("-l")) {
                     // the locale is provided

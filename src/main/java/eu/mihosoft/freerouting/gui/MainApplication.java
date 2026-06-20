@@ -106,9 +106,25 @@ public class MainApplication extends javax.swing.JFrame
             }
 
             new_frame.board_panel.board_handling.settings.autoroute_settings.set_stop_pass_no(new_frame.board_panel.board_handling.settings.autoroute_settings.get_start_pass_no() + startupOptions.max_passes - 1);
-            if (startupOptions.max_passes < 99999)
+            if (startupOptions.max_passes < 99999 || startupOptions.max_seconds > 0)
             {
-                InteractiveActionThread thread = new_frame.board_panel.board_handling.start_batch_autorouter();
+                final InteractiveActionThread thread = new_frame.board_panel.board_handling.start_batch_autorouter();
+
+                if (startupOptions.max_seconds > 0)
+                {
+                    // Stop the autorouter after the requested wall-clock interval, then let
+                    // the autorouterAborted() listener export the routed-so-far board.
+                    final int stop_after_ms = startupOptions.max_seconds * 1000;
+                    Thread stop_timer = new Thread(new Runnable() {
+                        public void run() {
+                            try { Thread.sleep(stop_after_ms); } catch (InterruptedException e) { return; }
+                            FRLogger.info("Maximum autorouting time of " + startupOptions.max_seconds + "s reached; stopping.");
+                            thread.request_stop();
+                        }
+                    });
+                    stop_timer.setDaemon(true);
+                    stop_timer.start();
+                }
 
                 thread.addListener(new ThreadActionListener() {
                     @Override
