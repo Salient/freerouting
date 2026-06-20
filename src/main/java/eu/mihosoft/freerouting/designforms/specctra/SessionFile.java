@@ -105,7 +105,9 @@ public class SessionFile
         IndentFileWriter output_file = null;
         try
         {
-            output_file = new IndentFileWriter(p_output_stream);
+            // Altium's Specctra route importer rejects LF-only route files with
+            // "List index out of bounds (0)"; it requires CRLF line endings.
+            output_file = new IndentFileWriter(p_output_stream, "\r\n");
         }
         catch (Exception e)
         {

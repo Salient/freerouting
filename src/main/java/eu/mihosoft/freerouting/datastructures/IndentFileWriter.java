@@ -33,10 +33,22 @@ import eu.mihosoft.freerouting.logger.FRLogger;
 public class IndentFileWriter extends java.io.OutputStreamWriter
 {
     
-    /** Creates a new instance of IndentFileWriter */
+    /** Creates a new instance of IndentFileWriter (Unix LF line endings). */
     public IndentFileWriter(java.io.OutputStream p_stream)
     {
         super(p_stream);
+        this.newline = "\n";
+    }
+
+    /**
+     * Creates a new instance of IndentFileWriter with the given line terminator.
+     * Use "\r\n" (CRLF) for Specctra route files imported by Altium, which rejects
+     * LF-only route files ("List index out of bounds (0)").
+     */
+    public IndentFileWriter(java.io.OutputStream p_stream, String p_newline)
+    {
+        super(p_stream);
+        this.newline = p_newline;
     }
     
     /**
@@ -88,7 +100,7 @@ public class IndentFileWriter extends java.io.OutputStreamWriter
                 something_written = true;
                 return;
             }
-            write("\n");
+            write(newline);
             for (int i = 0; i < current_indent_level; ++i)
             {
                 write(INDENT_STRING);
@@ -102,6 +114,7 @@ public class IndentFileWriter extends java.io.OutputStreamWriter
 
     private int current_indent_level = 0;
     private boolean something_written = false;
+    private final String newline;
     
     private static final String INDENT_STRING = "  ";
     private static final String BEGIN_SCOPE = "(";
