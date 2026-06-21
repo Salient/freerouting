@@ -456,8 +456,6 @@ public class SessionFile
         int layer_no = p_wire.get_layer();
         eu.mihosoft.freerouting.board.Layer board_layer = p_board.layer_structure.arr[layer_no];
         int wire_width = (int) Math.round(p_coordinate_transform.board_to_dsn(2 * p_wire.get_half_width()));
-        p_file.start_scope();
-        p_file.write("wire");
         Point[] corner_arr = p_wire.polyline().corner_arr();
         int [] coors = new int [2 * corner_arr.length];
         int corner_index = 0;
@@ -475,7 +473,7 @@ public class SessionFile
                 coors[corner_index] = curr_coors[1];
                 ++corner_index;
                 prev_coors = curr_coors;
-                
+
             }
         }
         if (corner_index < coors.length)
@@ -487,12 +485,26 @@ public class SessionFile
             }
             coors = adjusted_coors;
         }
-        write_path(board_layer.name, wire_width, coors, p_identifier_type, p_file);
-        // Altium's "Import Specctra Route" only attaches a wire to the board when the
-        // wire carries its own (net ...) and a (type ...). Without them the traces are
-        // silently dropped on import (vias still load). Emit them explicitly here.
+        // Emit the whole wire on ONE line. Altium's Specctra route importer cannot parse
+        // a wire whose (path ...) coordinates are split across multiple lines - it silently
+        // drops every such trace (vias still load). The wire must also carry its own
+        // (net ...) and (type ...) or it is not bound to a net on import.
+        p_file.new_line();
+        p_file.write("(wire (path ");
+        p_identifier_type.write(board_layer.name, p_file);
+        p_file.write(" ");
+        p_file.write(Integer.valueOf(wire_width).toString());
+        int corner_count = coors.length / 2;
+        for (int i = 0; i < corner_count; ++i)
+        {
+            p_file.write(" ");
+            p_file.write(Integer.valueOf(coors[2 * i]).toString());
+            p_file.write(" ");
+            p_file.write(Integer.valueOf(coors[2 * i + 1]).toString());
+        }
+        p_file.write(")");
         write_net_and_type(p_file, p_identifier_type, p_net_name, p_wire.get_fixed_state());
-        p_file.end_scope();
+        p_file.write(")");
     }
 
     private static void write_via(Via p_via, BasicBoard p_board, IdentifierType p_identifier_type,
@@ -500,8 +512,9 @@ public class SessionFile
     {
         eu.mihosoft.freerouting.library.Padstack via_padstack = p_via.get_padstack();
         FloatPoint via_location = p_via.get_center().to_float();
-        p_file.start_scope();
-        p_file.write("via ");
+        // One line per via, same reasoning as write_wire.
+        p_file.new_line();
+        p_file.write("(via ");
         p_identifier_type.write(via_padstack.name, p_file);
         p_file.write(" ");
         double[] location = p_coordinate_transform.board_to_dsn(via_location);
@@ -511,26 +524,25 @@ public class SessionFile
         Integer y_coor = (int) Math.round(location[1]);
         p_file.write(y_coor.toString());
         write_net_and_type(p_file, p_identifier_type, p_net_name, p_via.get_fixed_state());
-        p_file.end_scope();
+        p_file.write(")");
     }
 
     /**
-     * Writes the (net ...) and (type ...) sub-scopes that a wire or via needs so that
-     * strict route importers (Altium) bind it to a net. A non-fixed autorouted item is
-     * written as (type route); fixed/protected items keep their stronger type.
+     * Appends the (net ...) and (type ...) sub-scopes a wire or via needs so that strict
+     * route importers (Altium) bind it to a net. Written inline (space-separated, no line
+     * breaks) because Altium cannot parse a wire/via scope that spans multiple lines. A
+     * non-fixed autorouted item is (type route); fixed/protected items keep their type.
      */
     static private void write_net_and_type(IndentFileWriter p_file, IdentifierType p_identifier_type,
             String p_net_name, eu.mihosoft.freerouting.board.FixedState p_fixed_state) throws java.io.IOException
     {
         if (p_net_name != null)
         {
-            p_file.new_line();
-            p_file.write("(net ");
+            p_file.write(" (net ");
             p_identifier_type.write(p_net_name, p_file);
             p_file.write(")");
         }
-        p_file.new_line();
-        p_file.write("(type ");
+        p_file.write(" (type ");
         if (p_fixed_state == eu.mihosoft.freerouting.board.FixedState.SYSTEM_FIXED)
         {
             p_file.write("fix)");
@@ -543,26 +555,6 @@ public class SessionFile
         {
             p_file.write("route)");
         }
-    }
-    
-    private static void write_path(String p_layer_name, int p_width, int[] p_coors, IdentifierType p_identifier_type,
-            IndentFileWriter p_file)
-            throws java.io.IOException
-    {
-        p_file.start_scope();
-        p_file.write("path ");
-        p_identifier_type.write(p_layer_name, p_file);
-        p_file.write(" ");
-        p_file.write((Integer.valueOf(p_width)).toString());
-        int corner_count = p_coors.length/ 2;
-        for (int i = 0; i < corner_count; ++i)
-        {
-            p_file.new_line();
-            p_file.write(Integer.valueOf(p_coors[2 * i]).toString());
-            p_file.write(" ");
-            p_file.write(Integer.valueOf(p_coors[2 * i + 1]).toString());
-        }
-        p_file.end_scope();
     }
     
     private static void write_conduction_area( ConductionArea p_conduction_area, BasicBoard p_board,
