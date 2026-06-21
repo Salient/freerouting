@@ -414,11 +414,11 @@ public class SessionFile
             boolean is_via = curr_item instanceof Via;
             boolean is_conduction_area =  curr_item instanceof ConductionArea
                     && p_board.layer_structure.arr [curr_item.first_layer()].is_signal;
+            eu.mihosoft.freerouting.rules.Net curr_net = p_board.rules.nets.get(p_net_no);
             if (!header_written && (is_wire || is_via || is_conduction_area))
             {
                 p_file.start_scope();
                 p_file.write("net ");
-                eu.mihosoft.freerouting.rules.Net curr_net = p_board.rules.nets.get(p_net_no);
                 if (curr_net == null)
                 {
                     FRLogger.warn("SessionFile.write_net: net not found");
@@ -429,13 +429,14 @@ public class SessionFile
                 }
                 header_written = true;
             }
+            String net_name = (curr_net == null) ? null : curr_net.name;
             if (is_wire)
             {
-                write_wire((PolylineTrace)curr_item, p_board, p_identifier_type, p_coordinate_transform, p_file);
+                write_wire((PolylineTrace)curr_item, p_board, p_identifier_type, p_coordinate_transform, p_file, net_name);
             }
             else if (is_via)
             {
-                write_via((Via) curr_item, p_board, p_identifier_type, p_coordinate_transform, p_file);
+                write_via((Via) curr_item, p_board, p_identifier_type, p_coordinate_transform, p_file, net_name);
             }
             else if (is_conduction_area)
             {
@@ -450,7 +451,7 @@ public class SessionFile
     }
     
     private static void write_wire(PolylineTrace p_wire, BasicBoard p_board, IdentifierType p_identifier_type,
-            CoordinateTransform p_coordinate_transform, IndentFileWriter p_file) throws java.io.IOException
+            CoordinateTransform p_coordinate_transform, IndentFileWriter p_file, String p_net_name) throws java.io.IOException
     {
         int layer_no = p_wire.get_layer();
         eu.mihosoft.freerouting.board.Layer board_layer = p_board.layer_structure.arr[layer_no];
@@ -487,12 +488,15 @@ public class SessionFile
             coors = adjusted_coors;
         }
         write_path(board_layer.name, wire_width, coors, p_identifier_type, p_file);
-        write_fixed_state(p_file, p_wire.get_fixed_state());
+        // Altium's "Import Specctra Route" only attaches a wire to the board when the
+        // wire carries its own (net ...) and a (type ...). Without them the traces are
+        // silently dropped on import (vias still load). Emit them explicitly here.
+        write_net_and_type(p_file, p_identifier_type, p_net_name, p_wire.get_fixed_state());
         p_file.end_scope();
     }
-    
+
     private static void write_via(Via p_via, BasicBoard p_board, IdentifierType p_identifier_type,
-            CoordinateTransform p_coordinate_transform, IndentFileWriter p_file) throws java.io.IOException
+            CoordinateTransform p_coordinate_transform, IndentFileWriter p_file, String p_net_name) throws java.io.IOException
     {
         eu.mihosoft.freerouting.library.Padstack via_padstack = p_via.get_padstack();
         FloatPoint via_location = p_via.get_center().to_float();
@@ -506,15 +510,24 @@ public class SessionFile
         p_file.write(" ");
         Integer y_coor = (int) Math.round(location[1]);
         p_file.write(y_coor.toString());
-        write_fixed_state(p_file, p_via.get_fixed_state());
+        write_net_and_type(p_file, p_identifier_type, p_net_name, p_via.get_fixed_state());
         p_file.end_scope();
     }
-    
-    static private void write_fixed_state(IndentFileWriter p_file, eu.mihosoft.freerouting.board.FixedState p_fixed_state) throws java.io.IOException
+
+    /**
+     * Writes the (net ...) and (type ...) sub-scopes that a wire or via needs so that
+     * strict route importers (Altium) bind it to a net. A non-fixed autorouted item is
+     * written as (type route); fixed/protected items keep their stronger type.
+     */
+    static private void write_net_and_type(IndentFileWriter p_file, IdentifierType p_identifier_type,
+            String p_net_name, eu.mihosoft.freerouting.board.FixedState p_fixed_state) throws java.io.IOException
     {
-        if (p_fixed_state.ordinal() <= eu.mihosoft.freerouting.board.FixedState.SHOVE_FIXED.ordinal())
+        if (p_net_name != null)
         {
-            return;
+            p_file.new_line();
+            p_file.write("(net ");
+            p_identifier_type.write(p_net_name, p_file);
+            p_file.write(")");
         }
         p_file.new_line();
         p_file.write("(type ");
@@ -522,9 +535,13 @@ public class SessionFile
         {
             p_file.write("fix)");
         }
-        else
+        else if (p_fixed_state.ordinal() > eu.mihosoft.freerouting.board.FixedState.SHOVE_FIXED.ordinal())
         {
             p_file.write("protect)");
+        }
+        else
+        {
+            p_file.write("route)");
         }
     }
     
