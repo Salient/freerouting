@@ -780,6 +780,18 @@ public abstract class Shape
     }
 
     /**
+     * Like write_hole_scope, but emits integer coordinates. Required when writing a
+     * session file, where all coordinates must be integers.
+     */
+    public void write_hole_scope_int(IndentFileWriter p_file, IdentifierType p_identifier_type) throws java.io.IOException
+    {
+        p_file.start_scope();
+        p_file.write("window");
+        this.write_scope_int(p_file, p_identifier_type);
+        p_file.end_scope();
+    }
+
+    /**
      * Transforms a specctra dsn shape to a geometry.planar.Shape.
      */
     public abstract eu.mihosoft.freerouting.geometry.planar.Shape transform_to_board(CoordinateTransform p_coordinate_transform);

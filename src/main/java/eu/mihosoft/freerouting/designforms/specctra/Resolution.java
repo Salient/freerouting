@@ -53,8 +53,11 @@ public class Resolution extends ScopeKeyword
             p_par.unit = eu.mihosoft.freerouting.board.Unit.from_string((String) next_token);
             if (p_par.unit == null)
             {
-                FRLogger.warn("Resolution.read_scope: unit mil, inch or mm expected");
-                return false;
+                // An unrecognised unit string should not abort the whole parse. Default to mil (the
+                // Specctra default) and keep going; the integer value and closing bracket are still
+                // consumed below.
+                FRLogger.warn("Resolution.read_scope: unrecognised unit '" + next_token + "'; defaulting to mil");
+                p_par.unit = eu.mihosoft.freerouting.board.Unit.MIL;
             }
             // read the scale factor
             next_token = p_par.scanner.next_token();
@@ -63,7 +66,16 @@ public class Resolution extends ScopeKeyword
                 FRLogger.warn("Resolution.read_scope: integer expected");
                 return false;
             }
-            p_par.resolution = ((Integer)next_token).intValue();
+            int resolution_value = ((Integer)next_token).intValue();
+            if (resolution_value <= 0)
+            {
+                // The resolution is used as a divisor in coordinate transforms; a value of 0 (or
+                // negative) would produce Infinity/NaN coordinates and silently corrupt the whole
+                // board. Fall back to the Specctra default of 100 instead.
+                FRLogger.warn("Resolution.read_scope: resolution must be positive, got " + resolution_value + "; defaulting to 100");
+                resolution_value = 100;
+            }
+            p_par.resolution = resolution_value;
             // overread the closing bracket
             next_token = p_par.scanner.next_token();
             if (next_token != CLOSED_BRACKET)

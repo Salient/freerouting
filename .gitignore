@@ -16,4 +16,7 @@ bin/
 /distribution/runtime
 /distribution/Freerouting*
 
+# Windows "mark of the web" metadata files created under WSL
+*:Zone.Identifier
+
 

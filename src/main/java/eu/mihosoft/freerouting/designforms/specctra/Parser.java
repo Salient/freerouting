@@ -192,15 +192,19 @@ public class Parser extends ScopeKeyword
     {
         p_file.start_scope();
         p_file.write("parser");
-        if (!p_reduced)
-        {
-            p_file.new_line();
-            p_file.write("(string_quote ");
-            p_file.write(p_parser_info.string_quote);
-            p_file.write(")");
-            p_file.new_line();
-            p_file.write("(space_in_quoted_tokens on)");
-        }
+        // The string_quote and space_in_quoted_tokens declarations must always be
+        // emitted: a session file quotes component/net names that contain spaces or
+        // reserved characters (e.g. "Net-(C2-Pad1)"). Strict Specctra readers (Altium)
+        // that are not told which quote character is in use treat the quotes as literal
+        // bytes and miscount the parentheses inside quoted strings, which desyncs the
+        // parser. Previously these were skipped in reduced (session) mode, producing a
+        // file that only KiCad - which defaults the quote char to '"' - could read.
+        p_file.new_line();
+        p_file.write("(string_quote ");
+        p_file.write(p_parser_info.string_quote);
+        p_file.write(")");
+        p_file.new_line();
+        p_file.write("(space_in_quoted_tokens on)");
         if (p_parser_info.host_cad != null)
         {
             p_file.new_line();
@@ -223,8 +227,11 @@ public class Parser extends ScopeKeyword
                 p_file.write("(constant ");
                 for (int i = 0; i < curr_constant.length; ++i)
                 {
+                    if (i > 0)
+                    {
+                        p_file.write(" ");
+                    }
                     p_identifier_type.write(curr_constant[i], p_file);
-                    p_file.write(" ");
                 }
                 p_file.write(")");
             }
@@ -233,7 +240,9 @@ public class Parser extends ScopeKeyword
         {
             p_file.new_line();
             p_file.write("(write_resolution ");
-            p_file.write(p_parser_info.write_resolution.char_name.substring(0, 1));
+            // Emit the full unit name (e.g. "um", "mil"); truncating to a single
+            // character corrupted the unit on round-trip ("mil" -> "m").
+            p_file.write(p_parser_info.write_resolution.char_name);
             p_file.write(" ");
             Integer positive_int = p_parser_info.write_resolution.positive_int;
             p_file.write(positive_int.toString());

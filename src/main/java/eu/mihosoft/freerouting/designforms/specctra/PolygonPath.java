@@ -72,7 +72,9 @@ public class PolygonPath extends Path
         p_file.write("path ");
         p_identifier_type.write(this.layer.name, p_file);
         p_file.write(" ");
-        p_file.write((Double.valueOf(this.width)).toString());
+        // In a session file all numbers in a path must be integers; emitting the
+        // width as a Double ("0.0") breaks strict integer-only Specctra readers.
+        p_file.write(Integer.valueOf((int) Math.round(this.width)).toString());
         int corner_count = coordinate_arr.length/ 2;
         for (int i = 0; i < corner_count; ++i)
         {

@@ -179,6 +179,23 @@ public class BoardMenuFile extends javax.swing.JMenu
             this.add(write_session_file_item);
         }
 
+        javax.swing.JMenuItem write_route_file_item = new javax.swing.JMenuItem();
+        write_route_file_item.setText(resources.getString("route_file"));
+        write_route_file_item.setToolTipText(resources.getString("route_file_tooltip"));
+        write_route_file_item.addActionListener(new java.awt.event.ActionListener()
+        {
+
+            public void actionPerformed(java.awt.event.ActionEvent evt)
+            {
+                board_frame.design_file.write_specctra_route_file(board_frame);
+            }
+        });
+
+        if ((routing_board.get_test_level() != eu.mihosoft.freerouting.board.TestLevel.RELEASE_VERSION || !host_cad_is_eagle))
+        {
+            this.add(write_route_file_item);
+        }
+
         javax.swing.JMenuItem write_eagle_session_script_item = new javax.swing.JMenuItem();
         write_eagle_session_script_item.setText(resources.getString("eagle_script"));
         write_eagle_session_script_item.setToolTipText(resources.getString("eagle_script_tooltip"));

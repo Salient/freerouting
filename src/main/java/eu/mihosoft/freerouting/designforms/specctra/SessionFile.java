@@ -87,6 +87,60 @@ public class SessionFile
         return true;
     }
     
+    /**
+     * Creates a Specctra route (.rte) file from the RoutingBoard.
+     *
+     * A route file carries only the routing solution as a top-level (routes ...) scope
+     * (resolution, parser, library_out, network_out), without the (session ...) wrapper, component
+     * placement or was_is data that a session (.ses) file adds. Some host CAD tools import routing
+     * results as .rte rather than .ses. The (routes ...) payload is written by the exact same code
+     * path as write(...), so the two formats cannot drift apart.
+     */
+    public static boolean write_route_file(BasicBoard p_board, java.io.OutputStream p_output_stream, String p_design_name)
+    {
+        if (p_output_stream == null)
+        {
+            return false;
+        }
+        IndentFileWriter output_file = null;
+        try
+        {
+            // Altium's Specctra route importer rejects LF-only route files with
+            // "List index out of bounds (0)"; it requires CRLF line endings.
+            output_file = new IndentFileWriter(p_output_stream, "\r\n");
+        }
+        catch (Exception e)
+        {
+            FRLogger.error("unable to create route file", e);
+            return false;
+        }
+        try
+        {
+            String [] reserved_chars = {"(", ")", " ", "-"};
+            IdentifierType identifier_type = new IdentifierType(reserved_chars, p_board.communication.specctra_parser_info.string_quote);
+            double scale_factor = p_board.communication.coordinate_transform.dsn_to_board(1) / p_board.communication.resolution;
+            CoordinateTransform coordinate_transform = new CoordinateTransform(scale_factor, 0, 0);
+            // Write (routes ...) as the top-level scope. IndentFileWriter suppresses the newline
+            // before the very first token, so the file opens directly with '(' just like a session.
+            write_routes(p_board, identifier_type, coordinate_transform, output_file);
+        }
+        catch (java.io.IOException e)
+        {
+            FRLogger.error("unable to write route file", e);
+            return false;
+        }
+        try
+        {
+            output_file.close();
+        }
+        catch (java.io.IOException e)
+        {
+            FRLogger.error("unable to close route file", e);
+            return false;
+        }
+        return true;
+    }
+
     private static void write_session_scope(BasicBoard p_board, IdentifierType p_identifier_type,
             IndentFileWriter p_file, String p_session_name, String p_design_name) throws java.io.IOException
     {
@@ -198,14 +252,22 @@ public class SessionFile
     public static void write_was_is(BasicBoard p_board, IdentifierType p_identifier_type,
             IndentFileWriter p_file) throws java.io.IOException
     {
-        p_file.start_scope();
-        p_file.write("was_is");
+        // Only emit the was_is scope if at least one pin was actually swapped.
+        // An empty "(was_is)" scope makes strict Specctra readers (Altium) index
+        // element 0 of an empty pin-swap list, raising "List index out of bounds (0)".
+        boolean scope_started = false;
         Collection<eu.mihosoft.freerouting.board.Pin> board_pins = p_board.get_pins();
         for (eu.mihosoft.freerouting.board.Pin curr_pin : board_pins)
         {
             eu.mihosoft.freerouting.board.Pin swapped_with = curr_pin.get_changed_to();
             if (curr_pin.get_changed_to() != curr_pin)
             {
+                if (!scope_started)
+                {
+                    p_file.start_scope();
+                    p_file.write("was_is");
+                    scope_started = true;
+                }
                 p_file.new_line();
                 p_file.write("(pins ");
                 eu.mihosoft.freerouting.board.Component curr_cmp = p_board.components.get(curr_pin.get_component_no());
@@ -236,9 +298,12 @@ public class SessionFile
                 p_file.write(")");
             }
         }
-        p_file.end_scope();
+        if (scope_started)
+        {
+            p_file.end_scope();
+        }
     }
-    
+
     private static void write_routes(BasicBoard p_board, IdentifierType p_identifier_type, CoordinateTransform p_coordinate_transform,
             IndentFileWriter p_file) throws java.io.IOException
     {
@@ -349,11 +414,11 @@ public class SessionFile
             boolean is_via = curr_item instanceof Via;
             boolean is_conduction_area =  curr_item instanceof ConductionArea
                     && p_board.layer_structure.arr [curr_item.first_layer()].is_signal;
+            eu.mihosoft.freerouting.rules.Net curr_net = p_board.rules.nets.get(p_net_no);
             if (!header_written && (is_wire || is_via || is_conduction_area))
             {
                 p_file.start_scope();
                 p_file.write("net ");
-                eu.mihosoft.freerouting.rules.Net curr_net = p_board.rules.nets.get(p_net_no);
                 if (curr_net == null)
                 {
                     FRLogger.warn("SessionFile.write_net: net not found");
@@ -364,13 +429,14 @@ public class SessionFile
                 }
                 header_written = true;
             }
+            String net_name = (curr_net == null) ? null : curr_net.name;
             if (is_wire)
             {
-                write_wire((PolylineTrace)curr_item, p_board, p_identifier_type, p_coordinate_transform, p_file);
+                write_wire((PolylineTrace)curr_item, p_board, p_identifier_type, p_coordinate_transform, p_file, net_name);
             }
             else if (is_via)
             {
-                write_via((Via) curr_item, p_board, p_identifier_type, p_coordinate_transform, p_file);
+                write_via((Via) curr_item, p_board, p_identifier_type, p_coordinate_transform, p_file, net_name);
             }
             else if (is_conduction_area)
             {
@@ -385,13 +451,11 @@ public class SessionFile
     }
     
     private static void write_wire(PolylineTrace p_wire, BasicBoard p_board, IdentifierType p_identifier_type,
-            CoordinateTransform p_coordinate_transform, IndentFileWriter p_file) throws java.io.IOException
+            CoordinateTransform p_coordinate_transform, IndentFileWriter p_file, String p_net_name) throws java.io.IOException
     {
         int layer_no = p_wire.get_layer();
         eu.mihosoft.freerouting.board.Layer board_layer = p_board.layer_structure.arr[layer_no];
         int wire_width = (int) Math.round(p_coordinate_transform.board_to_dsn(2 * p_wire.get_half_width()));
-        p_file.start_scope();
-        p_file.write("wire");
         Point[] corner_arr = p_wire.polyline().corner_arr();
         int [] coors = new int [2 * corner_arr.length];
         int corner_index = 0;
@@ -409,7 +473,7 @@ public class SessionFile
                 coors[corner_index] = curr_coors[1];
                 ++corner_index;
                 prev_coors = curr_coors;
-                
+
             }
         }
         if (corner_index < coors.length)
@@ -421,18 +485,36 @@ public class SessionFile
             }
             coors = adjusted_coors;
         }
-        write_path(board_layer.name, wire_width, coors, p_identifier_type, p_file);
-        write_fixed_state(p_file, p_wire.get_fixed_state());
-        p_file.end_scope();
+        // Emit the whole wire on ONE line. Altium's Specctra route importer cannot parse
+        // a wire whose (path ...) coordinates are split across multiple lines - it silently
+        // drops every such trace (vias still load). The wire must also carry its own
+        // (net ...) and (type ...) or it is not bound to a net on import.
+        p_file.new_line();
+        p_file.write("(wire (path ");
+        p_identifier_type.write(board_layer.name, p_file);
+        p_file.write(" ");
+        p_file.write(Integer.valueOf(wire_width).toString());
+        int corner_count = coors.length / 2;
+        for (int i = 0; i < corner_count; ++i)
+        {
+            p_file.write(" ");
+            p_file.write(Integer.valueOf(coors[2 * i]).toString());
+            p_file.write(" ");
+            p_file.write(Integer.valueOf(coors[2 * i + 1]).toString());
+        }
+        p_file.write(")");
+        write_net_and_type(p_file, p_identifier_type, p_net_name, p_wire.get_fixed_state());
+        p_file.write(")");
     }
-    
+
     private static void write_via(Via p_via, BasicBoard p_board, IdentifierType p_identifier_type,
-            CoordinateTransform p_coordinate_transform, IndentFileWriter p_file) throws java.io.IOException
+            CoordinateTransform p_coordinate_transform, IndentFileWriter p_file, String p_net_name) throws java.io.IOException
     {
         eu.mihosoft.freerouting.library.Padstack via_padstack = p_via.get_padstack();
         FloatPoint via_location = p_via.get_center().to_float();
-        p_file.start_scope();
-        p_file.write("via ");
+        // One line per via, same reasoning as write_wire.
+        p_file.new_line();
+        p_file.write("(via ");
         p_identifier_type.write(via_padstack.name, p_file);
         p_file.write(" ");
         double[] location = p_coordinate_transform.board_to_dsn(via_location);
@@ -441,46 +523,38 @@ public class SessionFile
         p_file.write(" ");
         Integer y_coor = (int) Math.round(location[1]);
         p_file.write(y_coor.toString());
-        write_fixed_state(p_file, p_via.get_fixed_state());
-        p_file.end_scope();
+        write_net_and_type(p_file, p_identifier_type, p_net_name, p_via.get_fixed_state());
+        p_file.write(")");
     }
-    
-    static private void write_fixed_state(IndentFileWriter p_file, eu.mihosoft.freerouting.board.FixedState p_fixed_state) throws java.io.IOException
+
+    /**
+     * Appends the (net ...) and (type ...) sub-scopes a wire or via needs so that strict
+     * route importers (Altium) bind it to a net. Written inline (space-separated, no line
+     * breaks) because Altium cannot parse a wire/via scope that spans multiple lines. A
+     * non-fixed autorouted item is (type route); fixed/protected items keep their type.
+     */
+    static private void write_net_and_type(IndentFileWriter p_file, IdentifierType p_identifier_type,
+            String p_net_name, eu.mihosoft.freerouting.board.FixedState p_fixed_state) throws java.io.IOException
     {
-        if (p_fixed_state.ordinal() <= eu.mihosoft.freerouting.board.FixedState.SHOVE_FIXED.ordinal())
+        if (p_net_name != null)
         {
-            return;
+            p_file.write(" (net ");
+            p_identifier_type.write(p_net_name, p_file);
+            p_file.write(")");
         }
-        p_file.new_line();
-        p_file.write("(type ");
+        p_file.write(" (type ");
         if (p_fixed_state == eu.mihosoft.freerouting.board.FixedState.SYSTEM_FIXED)
         {
             p_file.write("fix)");
         }
-        else
+        else if (p_fixed_state.ordinal() > eu.mihosoft.freerouting.board.FixedState.SHOVE_FIXED.ordinal())
         {
             p_file.write("protect)");
         }
-    }
-    
-    private static void write_path(String p_layer_name, int p_width, int[] p_coors, IdentifierType p_identifier_type,
-            IndentFileWriter p_file)
-            throws java.io.IOException
-    {
-        p_file.start_scope();
-        p_file.write("path ");
-        p_identifier_type.write(p_layer_name, p_file);
-        p_file.write(" ");
-        p_file.write((Integer.valueOf(p_width)).toString());
-        int corner_count = p_coors.length/ 2;
-        for (int i = 0; i < corner_count; ++i)
+        else
         {
-            p_file.new_line();
-            p_file.write(Integer.valueOf(p_coors[2 * i]).toString());
-            p_file.write(" ");
-            p_file.write(Integer.valueOf(p_coors[2 * i + 1]).toString());
+            p_file.write("route)");
         }
-        p_file.end_scope();
     }
     
     private static void write_conduction_area( ConductionArea p_conduction_area, BasicBoard p_board,
@@ -519,7 +593,7 @@ public class SessionFile
         for (int i = 0; i < holes.length; ++i)
         {
             Shape dsn_hole = p_coordinate_transform.board_to_dsn(holes[i], conduction_layer);
-            dsn_hole.write_hole_scope(p_file, p_identifier_type);
+            dsn_hole.write_hole_scope_int(p_file, p_identifier_type);
         }
         p_file.end_scope();
     }
