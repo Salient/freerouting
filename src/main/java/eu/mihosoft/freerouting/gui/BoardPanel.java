@@ -117,6 +117,11 @@ public class BoardPanel extends javax.swing.JPanel
         {
             public void mouseWheelMoved(java.awt.event.MouseWheelEvent evt)
             {
+                // Ensure the current mouse position is up to date before zooming:
+                // a wheel event can arrive without any preceding mouseMoved event
+                // (e.g. scrolling without moving the pointer), which would otherwise
+                // leave current_mouse_position null and crash the zoom.
+                board_handling.mouse_moved(evt.getPoint());
                 board_handling.mouse_wheel_moved(evt.getWheelRotation());
             }
         });
