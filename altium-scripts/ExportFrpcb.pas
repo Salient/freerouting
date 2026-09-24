@@ -962,6 +962,52 @@ End;
   usable nonzero width - emitting no width at all made the autorouter abort on
   load. IPCB_MaxMinWidthConstraint.PreferedWidth is Altium's spelling (one 'r').
   Returned in Coords, matching every other length this script writes. }
+{ Extracts the Nth (0-based) InNetClass('...') name from a scope expression, or ''
+  when there is no Nth one. Altium scopes are often a compound OR-list such as
+  "InNetClass('1300V') or InNetClass('900V') or InNetClass('500V')", and a rule
+  like that carries a real constraint (on this board, CHASSIS to the HV classes at
+  150 mil) that a single-name parse would silently drop. }
+Function NthNetClassName(ScopeExpr : String; N : Integer) : String;
+Var
+    Rest : String;
+    P1, P2, Found : Integer;
+Begin
+    Result := '';
+    Rest := ScopeExpr;
+    Found := 0;
+    While True Do
+    Begin
+        P1 := Pos('InNetClass(''', Rest);
+        If P1 = 0 Then Exit;
+        Rest := Copy(Rest, P1 + Length('InNetClass('''), Length(Rest));
+        P2 := Pos('''', Rest);
+        If P2 = 0 Then Exit;
+        If Found = N Then
+        Begin
+            Result := Copy(Rest, 1, P2 - 1);
+            Exit;
+        End;
+        Inc(Found);
+        Rest := Copy(Rest, P2 + 1, Length(Rest));
+    End;
+End;
+
+{ The single InNet('...') name in a scope expression, or '' if absent. A rule
+  scoped to one NET rather than a class still constrains every class it is paired
+  with, so such rules are expanded against the other side's classes. }
+Function ExtractNetName(ScopeExpr : String) : String;
+Var
+    P1, P2 : Integer;
+Begin
+    Result := '';
+    P1 := Pos('InNet(''', ScopeExpr);
+    If P1 = 0 Then Exit;
+    P1 := P1 + Length('InNet(''');
+    P2 := Pos('''', Copy(ScopeExpr, P1, Length(ScopeExpr)));
+    If P2 = 0 Then Exit;
+    Result := Copy(ScopeExpr, P1, P2 - 1);
+End;
+
 Function ClassWidth(Board : IPCB_Board; ClassName : WideString) : TCoord;
 Var
     Iter      : IPCB_BoardIterator;
@@ -1365,6 +1411,7 @@ Var
     GapVal        : TCoord;
     RuleKindOk    : Boolean;
     IsMatrixRule  : Boolean;
+    NA, NB        : Integer;
     MatrixInfra   : IPCB_ClearanceMatrixInfrastructure;
     ItemEnum1, ItemEnum2 : IPCB_MatrixItemEnumerator;
     Name1, Name2  : WideString;
@@ -1439,10 +1486,15 @@ Begin
                 End
                 Else
                 Begin
-                    // Non-matrix clearance rule: only representable if both scopes are a
-                    // bare InNetClass('...') reference (see CONFIRMED note above - most
-                    // real rules on a real board are compound expressions and are
-                    // correctly NOT emitted here).
+                    // Non-matrix clearance rule. Both scopes are parsed as OR-lists of
+                    // InNetClass(...) and expanded into every implied class pair, because
+                    // real boards put genuine constraints in compound scopes - on this
+                    // board the only large clearance (150 mil) lives in
+                    //   InNet('CHASSIS') vs InNetClass('1300V') or ... or InNetClass('HV CLOSE')
+                    // which a single-name parse dropped entirely. A side scoped to a bare
+                    // InNet(...) contributes its NET name, which FRPCB cannot express as a
+                    // class pair; such a rule is expanded against the other side's classes
+                    // only if that net is itself a class name, and otherwise skipped.
                     Scope1 := '';
                     Scope2 := '';
                     GapVal := 0;
@@ -1450,14 +1502,34 @@ Begin
                     Try Scope2 := RuleClear.Scope2Expression; Except End;
                     Try GapVal := RuleClear.Gap; Except End;
 
-                    ClassA := ExtractNetClassName(Scope1);
-                    ClassB := ExtractNetClassName(Scope2);
-                    If (ClassA <> '') And (ClassB <> '') Then
+                    For NA := 0 To 15 Do
                     Begin
-                        If Not First Then OutLines.Add('    },');
-                        First := False;
-                        OutLines.Add('    { "classes": [' + JStr(ClassA) + ', ' + JStr(ClassB) +
-                            '], "clearance": ' + CoordMils(GapVal) + ' ');
+                        ClassA := NthNetClassName(Scope1, NA);
+                        If ClassA = '' Then
+                        Begin
+                            // No class on this side; fall back to a net name that happens
+                            // to also be a class (Altium allows both to share a name).
+                            If NA > 0 Then Break;
+                            ClassA := ExtractNetName(Scope1);
+                            If (ClassA = '') Or (Not IsNetClassName(Board, ClassA)) Then Break;
+                        End;
+                        For NB := 0 To 15 Do
+                        Begin
+                            ClassB := NthNetClassName(Scope2, NB);
+                            If ClassB = '' Then
+                            Begin
+                                If NB > 0 Then Break;
+                                ClassB := ExtractNetName(Scope2);
+                                If (ClassB = '') Or (Not IsNetClassName(Board, ClassB)) Then Break;
+                            End;
+                            If ClassA <> ClassB Then
+                            Begin
+                                If Not First Then OutLines.Add('    },');
+                                First := False;
+                                OutLines.Add('    { "classes": [' + JStr(ClassA) + ', ' + JStr(ClassB) +
+                                    '], "clearance": ' + CoordMils(GapVal) + ' ');
+                            End;
+                        End;
                     End;
                 End;
             End;
