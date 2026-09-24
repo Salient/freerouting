@@ -1,24 +1,9 @@
-buildscript {
-    repositories {
-        mavenCentral()
-        jcenter()
-    }
-
-    dependencies {
-        //
-    }
-}
-
 plugins {
-//    id "com.github.hierynomus.license" version "0.13.1"
     id 'java'
     id 'maven-publish'
     // net.nemerosa.versioning and com.jfrog.bintray removed: their transitive
     // dependencies were hosted only on jcenter, which shut down in 2021.
-    id 'com.github.ben-manes.versions' version '0.13.0'
-
-    // jigsaw:
-//    id 'org.gradle.java.experimental-jigsaw' version '0.1.1'
+    id 'com.github.ben-manes.versions' version '0.52.0'
 }
 
 ext.mainClassName = 'eu.mihosoft.freerouting.gui.MainApplication'
@@ -33,45 +18,40 @@ ext.gitCommit = {
 }()
 
 wrapper {
-    gradleVersion = '6.2'
+    gradleVersion = '9.5.0'
 }
 
-sourceCompatibility = '11'
-targetCompatibility = '11'
-[compileJava, compileTestJava]*.options*.encoding = 'UTF-8'
-
-gradle.projectsEvaluated {
-    tasks.withType(JavaCompile) {
-        options.compilerArgs << "-Xlint:unchecked" << "-Xlint:deprecation"
-    }
+// Build on any modern JDK (developed against 25) while still emitting Java 11
+// bytecode. options.release is used instead of source/targetCompatibility because
+// it also compiles against the Java 11 API, so a newer JDK cannot silently
+// introduce a dependency on a method that does not exist on 11.
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 11
+    options.compilerArgs << "-Xlint:unchecked" << "-Xlint:deprecation"
 }
 
 // javadoc is way too strict for my taste.
-if (JavaVersion.current().isJava8Compatible()) {
-    allprojects {
-        tasks.withType(Javadoc) {
-            options.addStringOption("encoding", "UTF-8")
-            options.addStringOption('Xdoclint:none', '-quiet')
-        }
-    }
+tasks.withType(Javadoc).configureEach {
+    options.addStringOption("encoding", "UTF-8")
+    options.addStringOption('Xdoclint:none', '-quiet')
 }
 
 repositories {
     mavenCentral()
-    jcenter()
 }
 
 dependencies {
-    testCompile group: 'junit', name: 'junit', version: '4.10'
+    testImplementation 'junit:junit:4.10'
 
     // https://mvnrepository.com/artifact/javax.help/javahelp
-    compile group: 'javax.help', name: 'javahelp', version: '2.0.05'
+    implementation 'javax.help:javahelp:2.0.05'
 
-    compile group: 'org.apache.logging.log4j', name: 'log4j-api', version: '2.13.0'
-    compile group: 'org.apache.logging.log4j', name: 'log4j-core', version: '2.13.0'
+    implementation 'org.apache.logging.log4j:log4j-api:2.13.0'
+    implementation 'org.apache.logging.log4j:log4j-core:2.13.0'
 
     // Used by the FRPCB importer/exporter (eu.mihosoft.freerouting.designforms.frpcb).
-    compile group: 'org.json', name: 'json', version: '20231013'
+    implementation 'org.json:json:20231013'
 }
 
 
@@ -98,12 +78,17 @@ jar {
     }
 }
 
-task executableJar(type: Jar) {
-    classifier = 'executable'
-
-    from configurations.runtime.asFileTree.files.collect { zipTree(it) }
+// Fat jar: every runtime dependency unpacked alongside our own classes. Gradle 7+
+// refuses to write duplicate archive entries, which merging several jars'
+// META-INF is guaranteed to produce, hence the explicit duplicatesStrategy.
+tasks.register('executableJar', Jar) {
+    archiveClassifier = 'executable'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 
     from files(sourceSets.main.output)
+    from({
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    })
 
     manifest {
 
@@ -123,34 +108,39 @@ task executableJar(type: Jar) {
     }
 }
 
+// The legacy `artifacts { archives ... }` block used to pull executableJar into
+// assemble; maven-publish no longer honours that, so wire it up directly.
+tasks.named('assemble') {
+    dependsOn 'executableJar'
+}
+
 apply from: 'gradle/publishing.gradle'
 
 // write constants to code
-task writeVersionInfo() {
+def generatedSrcDir = layout.buildDirectory.dir('generated-src')
+def constantsVersion = pub.versionId
+def constantsBuildDate = buildDate
+
+def writeVersionInfo = tasks.register('writeVersionInfo') {
+    outputs.dir(generatedSrcDir)
     doLast {
-        def buildInfoCode = new File("${project.buildDir}/generated-src/eu/mihosoft/freerouting/constants/Constants.java")
+        def buildInfoCode = generatedSrcDir.get().file('eu/mihosoft/freerouting/constants/Constants.java').asFile
         buildInfoCode.getParentFile().mkdirs()
         buildInfoCode.write("package eu.mihosoft.freerouting.constants;\n"
                 + "public class Constants {\n"
-                + "  public static final String FREEROUTING_VERSION = \"${publishing.versionId}\";\n"
-                + "  public static final String FREEROUTING_BUILD_DATE = \"${buildDate}\";\n"
+                + "  public static final String FREEROUTING_VERSION = \"${constantsVersion}\";\n"
+                + "  public static final String FREEROUTING_BUILD_DATE = \"${constantsBuildDate}\";\n"
                 + "}\n"
         )
     }
 }
 
-// add the 'vmfconstants' src dir to the folders to compile (input to groovyc)
-sourceSets.main.java.srcDirs+=file("${project.buildDir}/generated-src/eu/mihosoft/freerouting/constants/")
+// Add the generated constants dir to the folders to compile. Registering the task
+// itself (rather than a bare path) is what tells compileJava and sourcesJar alike
+// that writeVersionInfo has to run first; Gradle 9 fails the build on an undeclared
+// dependency like that instead of quietly racing.
+sourceSets.main.java.srcDir writeVersionInfo
 
-compileJava.dependsOn+="writeVersionInfo"
-
-
-task dist(type: Copy) {
-    from('build/libs/freerouting-executable.jar')
-    into('build/dist/')
-}
-
-dist.dependsOn+="assemble"
 
 //license {
 //    header = rootProject.file('config/HEADER')
@@ -167,13 +157,18 @@ dist.dependsOn+="assemble"
 //    exclude '**/*.svg'
 //}
 
+task dist(type: Copy) {
+    dependsOn 'assemble'
+    from(layout.buildDirectory.file('libs/freerouting-executable.jar'))
+    into(layout.buildDirectory.dir('dist'))
+}
+
 task run(type: JavaExec) {
     classpath = sourceSets.main.runtimeClasspath
 
-    main = mainClassName
+    mainClass = mainClassName
 
     // arguments to pass to the application
     //    args 'appArg1'
     // jvmArgs 'arg1'
 }
-

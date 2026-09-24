@@ -29,7 +29,8 @@ Freerouting is a fantastic piece of software. But the code hasn't been updated i
 
 ### Requirements
 
-- Java >= 11
+- JDK >= 17 to build (Gradle 9.5 requires it); the jars it produces target Java 11,
+  so they still *run* on any JDK >= 11. Tested building on JDK 25.
 - Internet connection (dependencies are downloaded automatically)
 - IDE: [Gradle](http://www.gradle.org/) Plugin (not necessary for command line usage)
 
