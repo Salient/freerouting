@@ -1053,9 +1053,36 @@ public class BoardHandling extends BoardHandlingImpl
      * in case the board is embedded into a host system.
      * Returns false, if the file is corrupted.
      */
+    /**
+     * An explicit Altium Constraints.xml from the -dc command line option, or null to
+     * auto-discover one next to the design file. Static because the option is parsed in
+     * MainApplication well before any BoardHandling exists, and threading it through the
+     * BoardFrame and BoardPanel constructors would change four unrelated signatures.
+     */
+    public static java.io.File altium_constraints_file = null;
+
+    /**
+     * True when -dc named a file explicitly, in which case a missing or unparseable one is
+     * a hard error rather than a fallback to the design file's own clearances.
+     */
+    public static boolean altium_constraints_required = false;
+
     public DsnFile.ReadResult import_design(java.io.InputStream p_design, String p_design_file_name,
                                             eu.mihosoft.freerouting.board.BoardObservers p_observers,
                                             eu.mihosoft.freerouting.datastructures.IdNoGenerator p_item_id_no_generator, TestLevel p_test_level)
+    {
+        return import_design(p_design, p_design_file_name, p_observers, p_item_id_no_generator, p_test_level, null);
+    }
+
+    /**
+     * As above, with an optional Altium Constraints.xml supplying the clearance matrix for
+     * an FRPCB design (see eu.mihosoft.freerouting.designforms.frpcb.AltiumConstraintsFile).
+     * Ignored for a Specctra dsn-file.
+     */
+    public DsnFile.ReadResult import_design(java.io.InputStream p_design, String p_design_file_name,
+                                            eu.mihosoft.freerouting.board.BoardObservers p_observers,
+                                            eu.mihosoft.freerouting.datastructures.IdNoGenerator p_item_id_no_generator, TestLevel p_test_level,
+                                            java.io.File p_constraints_file)
     {
         if (p_design == null)
         {
@@ -1070,7 +1097,7 @@ public class BoardHandling extends BoardHandlingImpl
             if (is_frpcb)
             {
                 FrpcbFile.ReadResult frpcb_result = FrpcbFile.read(p_design, this, p_observers,
-                        p_item_id_no_generator, p_test_level);
+                        p_item_id_no_generator, p_test_level, p_constraints_file);
                 read_result = DsnFile.ReadResult.valueOf(frpcb_result.name());
             }
             else

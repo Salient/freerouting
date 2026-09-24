@@ -50,6 +50,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -75,9 +77,15 @@ public class FrpcbFile
     {
     }
 
+    /**
+     * Reads an FRPCB file. p_constraints_file is an optional Altium Constraints.xml whose
+     * clearance matrix overrides the one carried in the json -- see AltiumConstraintsFile
+     * for why that is necessary. Pass null to use the json's own clearance_matrix.
+     */
     public static ReadResult read(java.io.InputStream p_input_stream, IBoardHandling p_board_handling,
                                   eu.mihosoft.freerouting.board.BoardObservers p_observers,
-                                  eu.mihosoft.freerouting.datastructures.IdNoGenerator p_item_id_no_generator, TestLevel p_test_level)
+                                  eu.mihosoft.freerouting.datastructures.IdNoGenerator p_item_id_no_generator, TestLevel p_test_level,
+                                  java.io.File p_constraints_file)
     {
         JSONObject root;
         try
@@ -303,6 +311,7 @@ public class FrpcbFile
                     net_classes_by_name.put(net_class.get_name(), net_class);
                 }
             }
+            assign_net_classes(net_classes_arr, board, net_classes_by_name);
         }
 
         // Clearance matrix: the pairwise class-to-class rules this format exists to carry.
@@ -310,6 +319,22 @@ public class FrpcbFile
         if (clearance_matrix_arr != null)
         {
             read_clearance_matrix(clearance_matrix_arr, board.rules.clearance_matrix, net_classes_by_name, len);
+        }
+
+        // An Altium Constraints.xml, when supplied, is the authoritative source of the
+        // clearance matrix and overrides whatever the json carried.
+        if (p_constraints_file != null)
+        {
+            AltiumConstraintsFile.Constraints constraints = AltiumConstraintsFile.read(p_constraints_file);
+            if (constraints == null)
+            {
+                FRLogger.error("FrpcbFile.read: '" + p_constraints_file
+                        + "' could not be used as a clearance source; refusing to import rather than"
+                        + " routing on the json's clearances, which are known to understate"
+                        + " high-voltage spacing", null);
+                return ReadResult.ERROR;
+            }
+            apply_altium_constraints(constraints, board, net_classes_by_name, len);
         }
 
         // Per-net rule overrides (width / clearance), with class-dedup-by-value.
@@ -719,19 +744,159 @@ public class FrpcbFile
             }
         }
 
-        JSONArray member_nets = p_nc_obj.optJSONArray("nets");
-        if (member_nets != null)
+        // Class membership is assigned by assign_net_classes, not here: it depends on how
+        // many nets every OTHER class claims, so it cannot be decided one class at a time.
+        return net_class;
+    }
+
+    /**
+     * Assigns every net to exactly one class, most specific class winning.
+     *
+     * <p>freerouting's Net holds a single NetClass, while a net is routinely a member of
+     * several Altium classes at once -- on the reference board every one of the 438 nets is
+     * in "All Nets" as well as, for two of them, "1300V". Assigning in file order let the
+     * broadest class overwrite the narrowest, which left the high-voltage classes with no
+     * members and made the whole pairwise clearance matrix inert no matter how correct its
+     * values were. Classes are therefore applied largest-first so the smallest class
+     * containing a net is applied last and wins.
+     */
+    private static void assign_net_classes(JSONArray p_net_classes, RoutingBoard p_board,
+                                           Map<String, NetClass> p_net_classes_by_name)
+    {
+        List<JSONObject> by_descending_size = new ArrayList<>();
+        for (int i = 0; i < p_net_classes.length(); ++i)
         {
+            JSONObject nc_obj = p_net_classes.getJSONObject(i);
+            if (nc_obj.optJSONArray("nets") != null && nc_obj.optString("name", null) != null)
+            {
+                by_descending_size.add(nc_obj);
+            }
+        }
+        by_descending_size.sort(Comparator.comparingInt(
+                (JSONObject nc_obj) -> nc_obj.getJSONArray("nets").length()).reversed());
+
+        for (JSONObject nc_obj : by_descending_size)
+        {
+            NetClass net_class = p_net_classes_by_name.get(nc_obj.getString("name"));
+            if (net_class == null)
+            {
+                continue;
+            }
+            JSONArray member_nets = nc_obj.getJSONArray("nets");
             for (int i = 0; i < member_nets.length(); ++i)
             {
-                String net_name = member_nets.getString(i);
-                for (Net net : p_board.rules.nets.get(net_name))
+                for (Net net : p_board.rules.nets.get(member_nets.getString(i)))
                 {
                     net.set_class(net_class);
                 }
             }
         }
-        return net_class;
+    }
+
+    /**
+     * Overwrites the clearance matrix with Altium's Constraint Manager values.
+     *
+     * <p>This does not go through read_clearance_matrix, for two reasons. First, a scope
+     * here may be the default clearance class rather than a net class, which that method
+     * cannot express. Second, a class only actually uses a dedicated clearance row if
+     * something called NetClass.set_trace_clearance_class for it -- read_net_class does
+     * that only when the json gave the class a "clearance" -- so a matrix cell written for
+     * a class that was left on the default row would have had no effect at all.
+     */
+    private static void apply_altium_constraints(AltiumConstraintsFile.Constraints p_constraints, RoutingBoard p_board,
+                                                 Map<String, NetClass> p_net_classes_by_name, LengthConverter p_len)
+    {
+        ClearanceMatrix clearance_matrix = p_board.rules.clearance_matrix;
+
+        // The default self-clearance has to be set before any class row is appended:
+        // ClearanceMatrix.append_class seeds a new row from the default class's values.
+        Double default_self = p_constraints.self_clearance_mil.get(AltiumConstraintsFile.DEFAULT_SCOPE);
+        if (default_self != null)
+        {
+            int value = (int) Math.round(p_len.to_board_mil(default_self));
+            int default_no = clearance_matrix.get_no(AltiumConstraintsFile.DEFAULT_SCOPE);
+            clearance_matrix.set_value(default_no, default_no, value);
+            FRLogger.info("Altium clearance: " + AltiumConstraintsFile.DEFAULT_SCOPE + " <-> "
+                    + AltiumConstraintsFile.DEFAULT_SCOPE + " = " + default_self + " mil");
+        }
+
+        for (String scope : p_constraints.scope_names())
+        {
+            ensure_clearance_class(clearance_matrix, scope, p_net_classes_by_name);
+        }
+
+        for (Map.Entry<String, Double> entry : p_constraints.self_clearance_mil.entrySet())
+        {
+            if (AltiumConstraintsFile.DEFAULT_SCOPE.equals(entry.getKey()))
+            {
+                continue;
+            }
+            int class_no = ensure_clearance_class(clearance_matrix, entry.getKey(), p_net_classes_by_name);
+            if (class_no < 0)
+            {
+                continue;
+            }
+            int value = (int) Math.round(p_len.to_board_mil(entry.getValue()));
+            clearance_matrix.set_value(class_no, class_no, value);
+            FRLogger.info("Altium clearance: " + entry.getKey() + " <-> " + entry.getKey()
+                    + " = " + entry.getValue() + " mil");
+        }
+
+        for (AltiumConstraintsFile.Pair pair : p_constraints.pairs)
+        {
+            int first_no = ensure_clearance_class(clearance_matrix, pair.first_scope, p_net_classes_by_name);
+            int second_no = ensure_clearance_class(clearance_matrix, pair.second_scope, p_net_classes_by_name);
+            if (first_no < 0 || second_no < 0)
+            {
+                FRLogger.warn("FrpcbFile.apply_altium_constraints: no clearance class for '"
+                        + pair.first_scope + "' <-> '" + pair.second_scope + "', skipping it");
+                continue;
+            }
+            int value = (int) Math.round(p_len.to_board_mil(pair.clearance_mil));
+            // Both directions, as elsewhere in this file: ClearanceMatrix does not enforce
+            // symmetry structurally.
+            clearance_matrix.set_value(first_no, second_no, value);
+            clearance_matrix.set_value(second_no, first_no, value);
+            FRLogger.info("Altium clearance: " + pair.first_scope + " <-> " + pair.second_scope
+                    + " = " + pair.clearance_mil + " mil");
+        }
+    }
+
+    /**
+     * Returns the clearance-matrix row for a scope, creating it and binding the matching
+     * net class to it when needed. Returns the default row for the default scope.
+     */
+    private static int ensure_clearance_class(ClearanceMatrix p_clearance_matrix, String p_scope,
+                                              Map<String, NetClass> p_net_classes_by_name)
+    {
+        if (AltiumConstraintsFile.DEFAULT_SCOPE.equals(p_scope))
+        {
+            return p_clearance_matrix.get_no(AltiumConstraintsFile.DEFAULT_SCOPE);
+        }
+        int class_no = p_clearance_matrix.get_no(p_scope);
+        if (class_no < 0)
+        {
+            p_clearance_matrix.append_class(p_scope);
+            class_no = p_clearance_matrix.get_no(p_scope);
+        }
+        NetClass net_class = p_net_classes_by_name.get(p_scope);
+        if (net_class != null && class_no >= 0)
+        {
+            // Without both of these the row exists but nothing routes against it: items read
+            // their clearance class from default_item_clearance_classes, while the router's
+            // trace rules read trace_clearance_class.
+            net_class.set_trace_clearance_class(class_no);
+            net_class.default_item_clearance_classes.set_all(class_no);
+        }
+        else if (net_class == null)
+        {
+            // A scope Altium matrixes by net rather than by class (e.g. CHASSIS). The row
+            // is created so the value is not lost, but only a net-scoped rule from the
+            // DelphiScript can actually attach a net to it.
+            FRLogger.warn("FrpcbFile: Altium clearance scope '" + p_scope
+                    + "' is not a net class in this file; its clearance row will not be attached to any net");
+        }
+        return class_no;
     }
 
     /**
@@ -747,8 +912,28 @@ public class FrpcbFile
         {
             p_clearance_matrix.append_class(class_name);
             class_no = p_clearance_matrix.get_no(class_name);
+            // Seed the new class against every existing one, as Network.add_clearance_rule
+            // does for DSN. append_class copies the default row, which starts at 0 (see
+            // ClearanceMatrix.get_default_instance in read), so without this every pair that
+            // no explicit rule mentions would end up with ZERO required clearance -- items
+            // free to touch -- rather than falling back to the class's own clearance.
+            for (int i = 1; i < p_clearance_matrix.get_class_count(); ++i)
+            {
+                for (int layer = 0; layer < p_clearance_matrix.get_layer_count(); ++layer)
+                {
+                    int value = Math.max(p_clearance_matrix.value(class_no, i, layer), clearance);
+                    p_clearance_matrix.set_value(class_no, i, layer, value);
+                    p_clearance_matrix.set_value(i, class_no, layer, value);
+                }
+            }
         }
         p_net_class.set_trace_clearance_class(class_no);
+        // set_trace_clearance_class alone is not enough: every item this importer inserts
+        // takes its clearance class from default_item_clearance_classes (see read_wire,
+        // read_component, read_routed_via, read_pour), not from trace_clearance_class. Without
+        // this, traces and pads stay on the default class and the entire pairwise clearance
+        // matrix is inert. Network.add_clearance_rule does the same for the DSN path.
+        p_net_class.default_item_clearance_classes.set_all(class_no);
         p_clearance_matrix.set_value(class_no, class_no, clearance);
     }
 
@@ -1112,8 +1297,22 @@ public class FrpcbFile
         p_board.insert_via(padstack, center, new int[]{board_net.net_number}, clearance_class, fixed, false);
     }
 
+    /**
+     * Overrides the fixed state of every piece of routing the file carries; null leaves each
+     * wire and via with whatever the file declared.
+     *
+     * <p>This is how -rm finish and -rm reroute are implemented. Reinterpreting the state at
+     * import time rather than at export time matters practically: producing the export needs a
+     * live Altium session driven by hand, so one exported file has to serve every mode.
+     */
+    public static FixedState imported_routing_fixed_state = null;
+
     private static FixedState parse_fixed_state(String p_value)
     {
+        if (imported_routing_fixed_state != null)
+        {
+            return imported_routing_fixed_state;
+        }
         if ("shove_fixed".equalsIgnoreCase(p_value))
         {
             return FixedState.SHOVE_FIXED;
@@ -1148,6 +1347,16 @@ public class FrpcbFile
         double to_board(double p_value_in_file_unit)
         {
             return transform.dsn_to_board(p_value_in_file_unit * units_per_mil);
+        }
+
+        /**
+         * For lengths that are natively in mil whatever the file's own unit is -- Altium's
+         * Constraints.xml carries an explicit unit suffix per value, so those are converted
+         * to mil before they get here.
+         */
+        double to_board_mil(double p_value_in_mil)
+        {
+            return transform.dsn_to_board(p_value_in_mil);
         }
 
         IntPoint to_board_point(double p_x, double p_y)

@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Synthetic Altium Constraint Manager export, mirroring the structure of a real
+  Constraints.xml for AltiumConstraintsFileTest.
+
+  Deliberately synthetic: the real file this reader was developed against belongs to a
+  munitions safe-and-arm board and carries its full net list, which does not belong in a
+  git history. Every structural quirk the reader has to cope with is reproduced here:
+
+    - the all-zeros GUID standing for the default/unclassified scope
+    - each cell stored twice, once per LayerType (1 and 2)
+    - both directions of an off-diagonal cell stored separately
+    - a scope that is a net rather than a net class (NET_GROUND)
+    - a GAP in mm rather than mil
+    - a cell whose two LayerType copies disagree, which must resolve to the larger
+    - an orphan ConstraintObject whose GUID resolves to nothing
+-->
+<ConstraintsData xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <FlattenedNetName2ConstraintNetId>
+    <FlattenedNetName2ConstraintNetIdEntry FlattenedNetName="NET_GROUND" ConstraintNetId="dddddddd-0000-0000-0000-00000000000d" />
+    <FlattenedNetName2ConstraintNetIdEntry FlattenedNetName="NET_SIGNAL" ConstraintNetId="eeeeeeee-0000-0000-0000-00000000000e" />
+  </FlattenedNetName2ConstraintNetId>
+
+  <CNetClasses>
+    <CNetClass Id="aaaaaaaa-0000-0000-0000-00000000000a" Name="HIGH_A" />
+    <CNetClass Id="bbbbbbbb-0000-0000-0000-00000000000b" Name="HIGH_B" />
+    <CNetClass Id="cccccccc-0000-0000-0000-00000000000c" Name="LOW" />
+  </CNetClasses>
+
+  <CCMFromScopes>
+    <!-- HIGH_A: self 25mil, to HIGH_B 75mil, to LOW 0.5mm, to default 200mil -->
+    <CCMFromScope Id="f0000000-0000-0000-0000-000000000001">
+      <ConstraintObject Id="aaaaaaaa-0000-0000-0000-00000000000a" />
+      <CCMToScopes>
+        <CCMToScope Id="t0000000-0000-0000-0000-000000000001" SetId="00000000-0000-0000-0000-000000000000">
+          <ConstraintObject Id="aaaaaaaa-0000-0000-0000-00000000000a" />
+          <DefaultConstraintClearancesMatrixConstraint Id="00000000-0000-0000-0000-000000000000" Kind="0" Comment="" Description="" Attributes="" LayerType="0" LayerId="0" />
+          <CCMConstraints>
+            <CCMConstraint Id="c0000000-0000-0000-0000-000000000001" Kind="0" Name="Clearance" Comment="" Description="Clearance Constraint [Clearance = 25mil]" Scope1="All" Scope2="All" Attributes="NETSCOPE=DifferentNets|LAYERKIND=SameLayer|GAP=25mil|GENERICCLEARANCE=25mil|IGNOREPADTOPADCLEARANCEINFOOTPRINT=FALSE|OBJECTCLEARANCES= |DOC=synthetic.PcbDoc" LayerType="2" LayerId="0" />
+            <CCMConstraint Id="c0000000-0000-0000-0000-000000000002" Kind="0" Name="Clearance" Comment="" Description="Clearance Constraint [Clearance = 25mil]" Scope1="All" Scope2="All" Attributes="NETSCOPE=DifferentNets|LAYERKIND=SameLayer|GAP=25mil|GENERICCLEARANCE=25mil|IGNOREPADTOPADCLEARANCEINFOOTPRINT=FALSE|OBJECTCLEARANCES= |DOC=synthetic.PcbDoc" LayerType="1" LayerId="0" />
+          </CCMConstraints>
+        </CCMToScope>
+        <CCMToScope Id="t0000000-0000-0000-0000-000000000002" SetId="00000000-0000-0000-0000-000000000000">
+          <ConstraintObject Id="bbbbbbbb-0000-0000-0000-00000000000b" />
+          <CCMConstraints>
+            <CCMConstraint Id="c0000000-0000-0000-0000-000000000003" Kind="0" Name="Clearance" Description="Clearance Constraint [Clearance = 75mil]" Scope1="All" Scope2="All" Attributes="NETSCOPE=DifferentNets|LAYERKIND=SameLayer|GAP=75mil|GENERICCLEARANCE=75mil" LayerType="2" LayerId="0" />
+            <CCMConstraint Id="c0000000-0000-0000-0000-000000000004" Kind="0" Name="Clearance" Description="Clearance Constraint [Clearance = 75mil]" Scope1="All" Scope2="All" Attributes="NETSCOPE=DifferentNets|LAYERKIND=SameLayer|GAP=75mil|GENERICCLEARANCE=75mil" LayerType="1" LayerId="0" />
+          </CCMConstraints>
+        </CCMToScope>
+        <CCMToScope Id="t0000000-0000-0000-0000-000000000003" SetId="00000000-0000-0000-0000-000000000000">
+          <ConstraintObject Id="cccccccc-0000-0000-0000-00000000000c" />
+          <CCMConstraints>
+            <CCMConstraint Id="c0000000-0000-0000-0000-000000000005" Kind="0" Name="Clearance" Description="Clearance Constraint [Clearance = 0.5mm]" Scope1="All" Scope2="All" Attributes="NETSCOPE=DifferentNets|LAYERKIND=SameLayer|GAP=0.5mm|GENERICCLEARANCE=0.5mm" LayerType="2" LayerId="0" />
+          </CCMConstraints>
+        </CCMToScope>
+        <CCMToScope Id="t0000000-0000-0000-0000-000000000004" SetId="00000000-0000-0000-0000-000000000000">
+          <ConstraintObject Id="00000000-0000-0000-0000-000000000000" />
+          <CCMConstraints>
+            <CCMConstraint Id="c0000000-0000-0000-0000-000000000006" Kind="0" Name="Clearance" Description="Clearance Constraint [Clearance = 200mil]" Scope1="All" Scope2="All" Attributes="NETSCOPE=DifferentNets|LAYERKIND=SameLayer|GAP=200mil" LayerType="2" LayerId="0" />
+          </CCMConstraints>
+        </CCMToScope>
+      </CCMToScopes>
+    </CCMFromScope>
+
+    <!-- HIGH_B: self 25mil, and the reverse direction of HIGH_A <-> HIGH_B -->
+    <CCMFromScope Id="f0000000-0000-0000-0000-000000000002">
+      <ConstraintObject Id="bbbbbbbb-0000-0000-0000-00000000000b" />
+      <CCMToScopes>
+        <CCMToScope Id="t0000000-0000-0000-0000-000000000005" SetId="00000000-0000-0000-0000-000000000000">
+          <ConstraintObject Id="bbbbbbbb-0000-0000-0000-00000000000b" />
+          <CCMConstraints>
+            <CCMConstraint Id="c0000000-0000-0000-0000-000000000007" Kind="0" Name="Clearance" Description="Clearance Constraint [Clearance = 25mil]" Scope1="All" Scope2="All" Attributes="NETSCOPE=DifferentNets|LAYERKIND=SameLayer|GAP=25mil" LayerType="2" LayerId="0" />
+          </CCMConstraints>
+        </CCMToScope>
+        <CCMToScope Id="t0000000-0000-0000-0000-000000000006" SetId="00000000-0000-0000-0000-000000000000">
+          <ConstraintObject Id="aaaaaaaa-0000-0000-0000-00000000000a" />
+          <CCMConstraints>
+            <CCMConstraint Id="c0000000-0000-0000-0000-000000000008" Kind="0" Name="Clearance" Description="Clearance Constraint [Clearance = 75mil]" Scope1="All" Scope2="All" Attributes="NETSCOPE=DifferentNets|LAYERKIND=SameLayer|GAP=75mil" LayerType="1" LayerId="0" />
+          </CCMConstraints>
+        </CCMToScope>
+      </CCMToScopes>
+    </CCMFromScope>
+
+    <!-- LOW: self stored with disagreeing LayerType copies (30 vs 40) -->
+    <CCMFromScope Id="f0000000-0000-0000-0000-000000000003">
+      <ConstraintObject Id="cccccccc-0000-0000-0000-00000000000c" />
+      <CCMToScopes>
+        <CCMToScope Id="t0000000-0000-0000-0000-000000000007" SetId="00000000-0000-0000-0000-000000000000">
+          <ConstraintObject Id="cccccccc-0000-0000-0000-00000000000c" />
+          <CCMConstraints>
+            <CCMConstraint Id="c0000000-0000-0000-0000-000000000009" Kind="0" Name="Clearance" Description="Clearance Constraint [Clearance = 30mil]" Scope1="All" Scope2="All" Attributes="NETSCOPE=DifferentNets|LAYERKIND=SameLayer|GAP=30mil" LayerType="2" LayerId="0" />
+            <CCMConstraint Id="c0000000-0000-0000-0000-00000000000a" Kind="0" Name="Clearance" Description="Clearance Constraint [Clearance = 40mil]" Scope1="All" Scope2="All" Attributes="NETSCOPE=DifferentNets|LAYERKIND=SameLayer|GAP=40mil" LayerType="1" LayerId="0" />
+          </CCMConstraints>
+        </CCMToScope>
+      </CCMToScopes>
+    </CCMFromScope>
+
+    <!-- default scope: self 8mil, and to a NET rather than a class -->
+    <CCMFromScope Id="f0000000-0000-0000-0000-000000000004">
+      <ConstraintObject Id="00000000-0000-0000-0000-000000000000" />
+      <CCMToScopes>
+        <CCMToScope Id="t0000000-0000-0000-0000-000000000008" SetId="00000000-0000-0000-0000-000000000000">
+          <ConstraintObject Id="00000000-0000-0000-0000-000000000000" />
+          <CCMConstraints>
+            <CCMConstraint Id="c0000000-0000-0000-0000-00000000000b" Kind="0" Name="Clearance" Description="Clearance Constraint [Clearance = 8mil]" Scope1="All" Scope2="All" Attributes="NETSCOPE=DifferentNets|LAYERKIND=SameLayer|GAP=8mil" LayerType="2" LayerId="0" />
+          </CCMConstraints>
+        </CCMToScope>
+        <CCMToScope Id="t0000000-0000-0000-0000-000000000009" SetId="00000000-0000-0000-0000-000000000000">
+          <ConstraintObject Id="dddddddd-0000-0000-0000-00000000000d" />
+          <CCMConstraints>
+            <CCMConstraint Id="c0000000-0000-0000-0000-00000000000c" Kind="0" Name="Clearance" Description="Clearance Constraint [Clearance = 10mil]" Scope1="All" Scope2="All" Attributes="NETSCOPE=DifferentNets|LAYERKIND=SameLayer|GAP=10mil" LayerType="2" LayerId="0" />
+          </CCMConstraints>
+        </CCMToScope>
+      </CCMToScopes>
+    </CCMFromScope>
+
+    <!-- An orphan scope: the GUID resolves to no net and no class, so its cell is skipped. -->
+    <CCMFromScope Id="f0000000-0000-0000-0000-000000000005">
+      <ConstraintObject Id="99999999-9999-9999-9999-999999999999" />
+      <CCMToScopes>
+        <CCMToScope Id="t0000000-0000-0000-0000-00000000000a" SetId="00000000-0000-0000-0000-000000000000">
+          <ConstraintObject Id="aaaaaaaa-0000-0000-0000-00000000000a" />
+          <CCMConstraints>
+            <CCMConstraint Id="c0000000-0000-0000-0000-00000000000d" Kind="0" Name="Clearance" Description="Clearance Constraint [Clearance = 999mil]" Scope1="All" Scope2="All" Attributes="NETSCOPE=DifferentNets|LAYERKIND=SameLayer|GAP=999mil" LayerType="2" LayerId="0" />
+          </CCMConstraints>
+        </CCMToScope>
+      </CCMToScopes>
+    </CCMFromScope>
+  </CCMFromScopes>
+</ConstraintsData>

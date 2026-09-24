@@ -169,6 +169,52 @@ public class BoardFrame extends javax.swing.JFrame
     
     
     /**
+     * The Altium Constraints.xml to take the clearance matrix from for an FRPCB design:
+     * whatever -dc named, else a Constraints.xml sitting next to the design file. Returns
+     * null when there is none, or when this is not an FRPCB design.
+     *
+     * <p>Altium rewrites Constraints.xml when constraints or the project are saved, not on
+     * every .PcbDoc save, so it can lag the board it describes. That is worth a warning on
+     * a board where the clearances are a safety property rather than a preference.
+     */
+    private java.io.File resolve_altium_constraints_file()
+    {
+        String design_name = this.design_file.get_name();
+        if (design_name == null
+                || !(design_name.toLowerCase().endsWith(".frpcb") || design_name.toLowerCase().endsWith(".frpcb.json")))
+        {
+            return null;
+        }
+        java.io.File result = eu.mihosoft.freerouting.interactive.BoardHandling.altium_constraints_file;
+        if (result == null)
+        {
+            java.io.File parent = this.design_file.get_parent_file();
+            java.io.File sibling = parent == null
+                    ? new java.io.File("Constraints.xml")
+                    : new java.io.File(parent, "Constraints.xml");
+            if (!sibling.isFile())
+            {
+                FRLogger.warn("No Constraints.xml next to '" + design_name
+                        + "'; the design file's own clearance_matrix will be used, which on an"
+                        + " Altium Constraint Manager project understates class-to-class clearance."
+                        + " Pass -dc <Constraints.xml> to supply it.");
+                return null;
+            }
+            result = sibling;
+            FRLogger.info("Using the Constraints.xml found next to the design file: " + result);
+        }
+        java.io.File design = this.design_file.get_input_file();
+        if (design != null && design.isFile() && result.isFile()
+                && result.lastModified() < design.lastModified())
+        {
+            FRLogger.warn("'" + result.getName() + "' is older than '" + design_name
+                    + "', so its clearance rules may not describe this board. Re-save the"
+                    + " constraints in Altium if the rules have changed.");
+        }
+        return result;
+    }
+
+    /**
      * Reads an existing board design from file.
      * If p_is_import, the design is read from a specctra dsn file.
      * Returns false, if the file is invalid.
@@ -178,7 +224,8 @@ public class BoardFrame extends javax.swing.JFrame
         DsnFile.ReadResult read_result = null;
         if (p_is_import) {
             read_result = board_panel.board_handling.import_design(p_input_stream, this.design_file.get_name(),
-                    this.board_observers, this.item_id_no_generator, this.test_level);
+                    this.board_observers, this.item_id_no_generator, this.test_level,
+                    resolve_altium_constraints_file());
             if (read_result == DsnFile.ReadResult.OK) {
                 viewport_position = new java.awt.Point(0, 0);
                 initialize_windows();

@@ -92,9 +92,12 @@ public class MainApplication extends javax.swing.JFrame
             String message = resources.getString("loading_design") + " "
                     + startupOptions.design_input_filename;
             WindowMessage welcome_window = WindowMessage.show(message);
+            // Must happen before the frame is built: the design is read inside the
+            // BoardFrame constructor chain.
+            apply_rule_and_mode_options(startupOptions);
             final BoardFrame new_frame =
                     create_board_frame(design_file, null, board_option,
-                            startupOptions.test_version_option, 
+                            startupOptions.test_version_option,
                             startupOptions.current_locale,
                             startupOptions.design_rules_filename);
             welcome_window.dispose();
@@ -102,6 +105,15 @@ public class MainApplication extends javax.swing.JFrame
             {
                 FRLogger.warn("Couldn't create window frame");
                 System.exit(1);
+                return;
+            }
+
+            if (startupOptions.routing_mode == StartupOptions.RoutingMode.VERIFY)
+            {
+                int violations = run_clearance_verification(new_frame, startupOptions);
+                // 0 clean, 2 violations found, 1 could not check -- so a caller can tell
+                // "this board is compliant" from "this board was never checked".
+                System.exit(violations < 0 ? 1 : (violations == 0 ? 0 : 2));
                 return;
             }
 
@@ -404,6 +416,84 @@ public class MainApplication extends javax.swing.JFrame
      * Creates a new board frame containing the data of the input design file.
      * Returns null, if an error occurred.
      */
+    /**
+     * Pushes the -dc and -rm options onto the import path. Both land on statics because the
+     * design file is read inside the BoardFrame constructor chain, before any caller holds a
+     * reference to the resulting board handling.
+     */
+    private static void apply_rule_and_mode_options(StartupOptions p_options)
+    {
+        if (p_options.altium_constraints_filename != null)
+        {
+            eu.mihosoft.freerouting.interactive.BoardHandling.altium_constraints_file =
+                    new java.io.File(p_options.altium_constraints_filename);
+            eu.mihosoft.freerouting.interactive.BoardHandling.altium_constraints_required = true;
+        }
+        if (p_options.routing_mode == StartupOptions.RoutingMode.FINISH)
+        {
+            // Protect what is already routed. Note this leaves the autorouter unable to
+            // repair any pre-existing clearance violation, which is why -rm verify is worth
+            // running first.
+            eu.mihosoft.freerouting.designforms.frpcb.FrpcbFile.imported_routing_fixed_state =
+                    eu.mihosoft.freerouting.board.FixedState.USER_FIXED;
+            FRLogger.info("Routing mode 'finish': existing routing is protected; only incomplete"
+                    + " connections will be routed.");
+        }
+        else if (p_options.routing_mode == StartupOptions.RoutingMode.REROUTE)
+        {
+            eu.mihosoft.freerouting.designforms.frpcb.FrpcbFile.imported_routing_fixed_state =
+                    eu.mihosoft.freerouting.board.FixedState.UNFIXED;
+            FRLogger.info("Routing mode 'reroute': existing routing may be ripped up and rerouted.");
+        }
+        else
+        {
+            // verify: report the board exactly as the file describes it. The fixed state has
+            // no bearing on clearance anyway.
+            FRLogger.info("Routing mode 'verify': clearances will be checked, nothing routed.");
+        }
+    }
+
+    /**
+     * Writes the clearance report for -rm verify. Returns the violation count, or a negative
+     * number when the check could not be run at all.
+     */
+    private static int run_clearance_verification(BoardFrame p_frame, StartupOptions p_options)
+    {
+        eu.mihosoft.freerouting.board.BasicBoard board =
+                p_frame.board_panel.board_handling.get_routing_board();
+        if (board == null)
+        {
+            FRLogger.error("Clearance verification: the board could not be read.", null);
+            return -1;
+        }
+        java.io.PrintWriter writer = null;
+        try
+        {
+            if (p_options.design_output_filename != null)
+            {
+                FRLogger.info("Writing the clearance report to '" + p_options.design_output_filename + "'...");
+                writer = new java.io.PrintWriter(p_options.design_output_filename, "UTF-8");
+            }
+            else
+            {
+                writer = new java.io.PrintWriter(new java.io.OutputStreamWriter(System.out));
+            }
+            return eu.mihosoft.freerouting.interactive.ClearanceReport.write(board, writer);
+        }
+        catch (Exception e)
+        {
+            FRLogger.error("Clearance verification failed.", e);
+            return -1;
+        }
+        finally
+        {
+            if (writer != null)
+            {
+                writer.close();
+            }
+        }
+    }
+
     static private BoardFrame create_board_frame(DesignFile p_design_file, javax.swing.JTextField p_message_field,
             BoardFrame.Option p_option, boolean p_is_test_version, java.util.Locale p_locale, String p_design_rules_file)
     {

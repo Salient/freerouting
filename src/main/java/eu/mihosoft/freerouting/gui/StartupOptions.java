@@ -9,6 +9,33 @@ import java.util.Locale;
  * 6/28/2014
  */
 public class StartupOptions {
+    /** What to do with the routing a design file already contains. */
+    public enum RoutingMode {
+        /**
+         * Treat existing copper as movable, so the autorouter may rip it up and reroute the
+         * whole board. The historical behaviour, and the default.
+         */
+        REROUTE,
+        /**
+         * Protect existing copper (FixedState.USER_FIXED) so the autorouter only completes
+         * the connections that are still incomplete.
+         */
+        FINISH,
+        /**
+         * Import and check clearances, do not autoroute. The report goes to -do.
+         */
+        VERIFY;
+
+        static RoutingMode parse(String p_value) {
+            for (RoutingMode mode : values()) {
+                if (mode.name().equalsIgnoreCase(p_value)) {
+                    return mode;
+                }
+            }
+            return null;
+        }
+    }
+
     boolean single_design_option = false;
     boolean test_version_option = false;
     boolean session_file_option = false;
@@ -17,6 +44,10 @@ public class StartupOptions {
     String design_output_filename = null;
     String design_rules_filename = null;
     String design_input_directory_name = null;
+    /** -dc: an Altium Constraints.xml to take the clearance matrix from. */
+    String altium_constraints_filename = null;
+    /** -rm: what to do with the routing already present in the design file. */
+    RoutingMode routing_mode = RoutingMode.REROUTE;
     int max_passes = 99999;
     // Wall-clock limit for headless batch autorouting, in seconds. <= 0 means no
     // limit (route until the autorouter finishes or the pass cap is reached).
@@ -39,7 +70,12 @@ public class StartupOptions {
     private void process(String[] p_args) {
         for (int i = 0; i < p_args.length; ++i) {
             try {
-                if (p_args[i].startsWith("-de")) {
+                if (p_args[i].startsWith("-dc")) {
+                    // an explicit Altium Constraints.xml supplying the clearance matrix
+                    if (p_args.length > i + 1 && !p_args[i + 1].startsWith("-")) {
+                        altium_constraints_filename = p_args[i + 1];
+                    }
+                } else if (p_args[i].startsWith("-de")) {
                     // the design file is provided
                     if (p_args.length > i + 1 && !p_args[i + 1].startsWith("-")) {
                         single_design_option = true;
@@ -57,6 +93,17 @@ public class StartupOptions {
                 } else if (p_args[i].startsWith("-dr")) {
                     if (p_args.length > i + 1 && !p_args[i + 1].startsWith("-")) {
                         design_rules_filename = p_args[i + 1];
+                    }
+                } else if (p_args[i].startsWith("-rm")) {
+                    // how to treat the routing the design file already contains
+                    if (p_args.length > i + 1 && !p_args[i + 1].startsWith("-")) {
+                        RoutingMode parsed = RoutingMode.parse(p_args[i + 1]);
+                        if (parsed == null) {
+                            FRLogger.warn("Unknown -rm mode '" + p_args[i + 1] + "'; keeping "
+                                    + routing_mode.name().toLowerCase());
+                        } else {
+                            routing_mode = parsed;
+                        }
                     }
                 } else if (p_args[i].startsWith("-mp")) {
                     if (p_args.length > i + 1 && !p_args[i + 1].startsWith("-")) {

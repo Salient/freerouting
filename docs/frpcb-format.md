@@ -182,10 +182,10 @@ values go in `clearance_matrix`.
 
 ```jsonc
 "clearance_matrix": [
-  { "classes": ["500V", "900V"], "clearance": 25.0 },
-  { "classes": ["500V", "1300V"], "clearance": 75.0 },
-  { "classes": ["HV CLOSE", "900V"], "clearance": 100.0 },
-  { "classes": ["Power Rail", "500V"], "clearance": 75.0 }
+  { "classes": ["500V", "900V"], "clearance": 75.0 },
+  { "classes": ["500V", "1300V"], "clearance": 150.0 },
+  { "classes": ["1300V", "HV CLOSE"], "clearance": 100.0 },
+  { "classes": ["Power Rail", "default"], "clearance": 10.0 }
 ]
 ```
 
@@ -194,8 +194,57 @@ Directly populates `ClearanceMatrix` cells for the named class pair, on both
 internal model does not structurally enforce symmetry (per the model survey,
 every existing DSN writer sets both cells by convention; FRPCB's importer
 does the same rather than relying on the matrix to symmetrize itself). This
-is exactly the Altium "Rules" grid from the screenshot that Specctra DSN
-export currently drops on the floor.
+is exactly the Altium "Rules" grid that Specctra DSN export drops on the floor.
+
+### Prefer `Constraints.xml`: this array is not where Altium keeps the matrix
+
+**On an Altium project that uses the Constraint Manager, do not trust this
+array.** The DelphiScript can only reach the legacy `PCB_Rule` objects, and on
+such a project those hold a stale default matrix, not the design's real rules.
+Measured on the reference board, every high-voltage value in this array was
+understated by between 2.5× and 25×:
+
+| pair | real | this array said |
+|---|---|---|
+| (default) ↔ `1300V` | **200 mil** | 8 |
+| (default) ↔ `900V` | **150 mil** | 8 |
+| `500V` ↔ `1300V` | **150 mil** | 10 |
+| `1300V` ↔ `HV CLOSE` | **100 mil** | 10 |
+| `500V` ↔ `900V` | **75 mil** | 10 |
+| `500V`/`900V`/`1300V` self | **25 mil** | 10 |
+
+The real matrix lives in `Constraints.xml`, which Altium keeps beside the
+`.PcbDoc`, as `CCMFromScope → CCMToScope → CCMConstraint[GAP]` keyed by GUID
+against `CNetClass`. Pass it with `-dc`, or leave a copy next to the design file
+and the importer finds it:
+
+    java -jar freerouting-executable.jar -de board.frpcb.json -dc Constraints.xml
+
+A supplied `Constraints.xml` **replaces** this array and the
+`net_classes[].clearance` diagonals. See
+`designforms/frpcb/AltiumConstraintsFile.java`. Two cautions:
+
+- `Constraints.xml` is rewritten when constraints or the project are saved, not
+  on every `.PcbDoc` save, so it can lag the board. The importer warns when it is
+  older than the design file.
+- **Neither store alone is complete.** Every clearance in `Constraints.xml` is a
+  class-pair matrix cell, so a rule scoped to a single *net* — on the reference
+  board, `CHASSIS` to the HV classes at 150 mil — exists only as a legacy
+  `PCB_Rule` and still has to come from the DelphiScript via `nets[].rule`.
+
+### Class membership, and why a correct matrix is not sufficient
+
+A net is routinely in several Altium classes at once: on the reference board all
+438 nets are in `All Nets` as well as, for two of them, `1300V`. freerouting's
+`Net` holds exactly one `NetClass`, so the importer assigns the **smallest**
+class containing each net (`FrpcbFile.assign_net_classes`). Assigning in file
+order instead let `All Nets` overwrite `1300V`, which left the HV classes with no
+members and made the matrix inert whatever its values were.
+
+For the same reason a class's clearance row is bound with both
+`NetClass.set_trace_clearance_class` *and*
+`default_item_clearance_classes.set_all`: every inserted item reads the latter,
+so setting only the former leaves all copper on the default class.
 
 ## `vias`
 
@@ -249,6 +298,22 @@ Altium already has that should be protected from the autorouter, and (b) the
 reverse direction: freerouting emits this same `routing` block standalone
 after autorouting, for a script on the Altium side to place tracks/vias via
 `PCBServer.PCBObjectFactory(eTrackObject, ...)`.
+
+### `-rm`: what to do with the routing already in the file
+
+The exporter cannot know which of these a given run wants, and producing an
+export needs a live Altium session driven by hand, so the fixed state is
+reinterpreted at *import* time and one exported file serves all three modes:
+
+| `-rm` | effect |
+|---|---|
+| `reroute` (default) | every wire and via becomes `unfixed`; the autorouter may rip up and reroute the whole board |
+| `finish` | everything becomes `user_fixed`; the autorouter only completes connections that are still incomplete |
+| `verify` | import and check clearances, route nothing; a violation report goes to `-do`. Exit 0 clean, 2 violations found, 1 could not check |
+
+Run `verify` before `finish`: `finish` makes existing copper unfixable, so any
+clearance violation already present becomes one the router is not allowed to
+repair.
 
 ## Deliberately excluded (not representable by either side)
 
