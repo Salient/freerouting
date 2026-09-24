@@ -221,6 +221,7 @@ public class MainApplication extends javax.swing.JFrame
         demonstration_button = new javax.swing.JButton();
         sample_board_button = new javax.swing.JButton();
         open_board_button = new javax.swing.JButton();
+        recent_board_button = new javax.swing.JButton();
         restore_defaults_button = new javax.swing.JButton();
         message_field = new javax.swing.JTextField();
         message_field.setText("Neither '-de <design file>' nor '-di <design directory>' are specified.");
@@ -270,6 +271,17 @@ public class MainApplication extends javax.swing.JFrame
             main_panel.add(open_board_button, gridbag_constraints);
         }
 
+        recent_board_button.setText(resources.getString("open_recent_design"));
+        recent_board_button.setToolTipText(resources.getString("open_recent_design_tooltip"));
+        recent_board_button.addActionListener((java.awt.event.ActionEvent evt) -> {
+            open_recent_design_action(evt);
+        });
+        gridbag.setConstraints(recent_board_button, gridbag_constraints);
+        if (add_buttons)
+        {
+            main_panel.add(recent_board_button, gridbag_constraints);
+        }
+
         if (startupOptions.getWebstartOption() && add_buttons)
         {
             restore_defaults_button.setText(resources.getString("restore_defaults"));
@@ -295,11 +307,53 @@ public class MainApplication extends javax.swing.JFrame
         setSize(620,300);
     }
 
+    /**
+     * Shows the recently opened designs as a popup menu under the button and opens the
+     * one picked. Entries whose file has since been deleted are filtered out by
+     * RecentFiles, so the menu never offers a dead path.
+     */
+    private void open_recent_design_action(java.awt.event.ActionEvent evt)
+    {
+        java.util.List<String> paths = RecentFiles.get_paths();
+        javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+        if (paths.isEmpty())
+        {
+            javax.swing.JMenuItem empty = new javax.swing.JMenuItem(resources.getString("no_recent_designs"));
+            empty.setEnabled(false);
+            menu.add(empty);
+        }
+        else
+        {
+            for (String path : paths)
+            {
+                final String design_path = path;
+                // Show the file name, with the full path as the tooltip - the paths are
+                // long enough that a menu of them would be unreadable otherwise.
+                javax.swing.JMenuItem item =
+                        new javax.swing.JMenuItem(new java.io.File(design_path).getName());
+                item.setToolTipText(design_path);
+                item.addActionListener((java.awt.event.ActionEvent e) -> {
+                    open_design_file(DesignFile.get_recent_instance(design_path));
+                });
+                menu.add(item);
+            }
+        }
+        menu.show(recent_board_button, 0, recent_board_button.getHeight());
+    }
+
     /** opens a board design from a binary file or a specctra dsn file. */
     private void open_board_design_action(java.awt.event.ActionEvent evt)
     {
-        DesignFile design_file = DesignFile.open_dialog(this.design_dir_name);
+        open_design_file(DesignFile.open_dialog(this.design_dir_name));
+    }
 
+    /**
+     * Loads p_design_file into a new board frame. Shared by the file chooser and the
+     * recent-designs menu; a null p_design_file just reports the cancelled/unavailable
+     * case in the message field.
+     */
+    private void open_design_file(DesignFile design_file)
+    {
         if (design_file == null)
         {
             message_field.setText(resources.getString("message_3"));
@@ -413,6 +467,7 @@ public class MainApplication extends javax.swing.JFrame
     private final javax.swing.JButton demonstration_button;
     private final javax.swing.JButton sample_board_button;
     private final javax.swing.JButton open_board_button;
+    private final javax.swing.JButton recent_board_button;
     private final javax.swing.JButton restore_defaults_button;
     private final javax.swing.JTextField message_field;
     private final javax.swing.JPanel main_panel;

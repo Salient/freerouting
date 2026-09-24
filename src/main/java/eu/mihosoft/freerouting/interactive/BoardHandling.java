@@ -58,6 +58,7 @@ import eu.mihosoft.freerouting.board.Unit;
 import eu.mihosoft.freerouting.board.TestLevel;
 
 import eu.mihosoft.freerouting.designforms.specctra.DsnFile;
+import eu.mihosoft.freerouting.designforms.frpcb.FrpcbFile;
 
 /**
  *
@@ -1042,16 +1043,42 @@ public class BoardHandling extends BoardHandlingImpl
                                             eu.mihosoft.freerouting.board.BoardObservers p_observers,
                                             eu.mihosoft.freerouting.datastructures.IdNoGenerator p_item_id_no_generator, TestLevel p_test_level)
     {
+        return import_design(p_design, null, p_observers, p_item_id_no_generator, p_test_level);
+    }
+
+    /**
+     * Imports a board design from a Specctra dsn-file, or from an FRPCB json-file if
+     * p_design_file_name ends in ".frpcb" or ".frpcb.json" (see docs/frpcb-format.md).
+     * The parameters p_item_observers and p_item_id_no_generator are used,
+     * in case the board is embedded into a host system.
+     * Returns false, if the file is corrupted.
+     */
+    public DsnFile.ReadResult import_design(java.io.InputStream p_design, String p_design_file_name,
+                                            eu.mihosoft.freerouting.board.BoardObservers p_observers,
+                                            eu.mihosoft.freerouting.datastructures.IdNoGenerator p_item_id_no_generator, TestLevel p_test_level)
+    {
         if (p_design == null)
         {
             return DsnFile.ReadResult.ERROR;
         }
+        boolean is_frpcb = p_design_file_name != null
+                && (p_design_file_name.toLowerCase().endsWith(".frpcb")
+                    || p_design_file_name.toLowerCase().endsWith(".frpcb.json"));
         DsnFile.ReadResult read_result;
         try
         {
-            read_result =
-                    DsnFile.read(p_design, this, p_observers,
-                    p_item_id_no_generator, p_test_level);
+            if (is_frpcb)
+            {
+                FrpcbFile.ReadResult frpcb_result = FrpcbFile.read(p_design, this, p_observers,
+                        p_item_id_no_generator, p_test_level);
+                read_result = DsnFile.ReadResult.valueOf(frpcb_result.name());
+            }
+            else
+            {
+                read_result =
+                        DsnFile.read(p_design, this, p_observers,
+                        p_item_id_no_generator, p_test_level);
+            }
         }
         catch (Exception e)
         {

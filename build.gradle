@@ -69,6 +69,9 @@ dependencies {
 
     compile group: 'org.apache.logging.log4j', name: 'log4j-api', version: '2.13.0'
     compile group: 'org.apache.logging.log4j', name: 'log4j-core', version: '2.13.0'
+
+    // Used by the FRPCB importer/exporter (eu.mihosoft.freerouting.designforms.frpcb).
+    compile group: 'org.json', name: 'json', version: '20231013'
 }
 
 

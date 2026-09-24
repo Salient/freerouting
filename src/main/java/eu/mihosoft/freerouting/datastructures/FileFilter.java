@@ -73,6 +73,16 @@ public class FileFilter extends javax.swing.filechooser.FileFilter
             {
                 return true;
             }
+            // Also honour multi-part extensions such as "frpcb.json", which the
+            // single-extension comparison above cannot match (it only ever sees the
+            // part after the LAST dot). Without this an FRPCB file is invisible in the
+            // file-open dialog even though the importer handles it, because its last
+            // extension is the generic "json".
+            if (extensions[i].indexOf('.') >= 0
+                    && file_name.toLowerCase().endsWith("." + extensions[i].toLowerCase()))
+            {
+                return true;
+            }
         }
         return false;
     }

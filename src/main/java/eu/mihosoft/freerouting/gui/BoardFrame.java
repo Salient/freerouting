@@ -177,8 +177,8 @@ public class BoardFrame extends javax.swing.JFrame
         java.awt.Point viewport_position = null;
         DsnFile.ReadResult read_result = null;
         if (p_is_import) {
-            read_result = board_panel.board_handling.import_design(p_input_stream, this.board_observers,
-                    this.item_id_no_generator, this.test_level);
+            read_result = board_panel.board_handling.import_design(p_input_stream, this.design_file.get_name(),
+                    this.board_observers, this.item_id_no_generator, this.test_level);
             if (read_result == DsnFile.ReadResult.OK) {
                 viewport_position = new java.awt.Point(0, 0);
                 initialize_windows();

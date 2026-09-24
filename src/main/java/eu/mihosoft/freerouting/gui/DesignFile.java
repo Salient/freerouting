@@ -35,8 +35,8 @@ import eu.mihosoft.freerouting.logger.FRLogger;
 public class DesignFile
 {
 
-    public static final String[] all_file_extensions = {"bin", "dsn"};
-    public static final String[] text_file_extensions = {"dsn"};
+    public static final String[] all_file_extensions = {"bin", "dsn", "frpcb", "frpcb.json"};
+    public static final String[] text_file_extensions = {"dsn", "frpcb", "frpcb.json"};
     public static final String binary_file_extension = "bin";
 
     public static DesignFile get_instance(String p_design_file_name, boolean p_is_webstart)
@@ -45,7 +45,14 @@ public class DesignFile
         {
             return null;
         }
-        DesignFile result = new DesignFile(new java.io.File(p_design_file_name), null);
+        java.io.File file = new java.io.File(p_design_file_name);
+        // Record command-line opened designs too, so the recent list and the chooser's
+        // start directory reflect them as well as ones picked from the dialog.
+        if (file.exists())
+        {
+            RecentFiles.add(file);
+        }
+        DesignFile result = new DesignFile(file, null);
         return result;
     }
 
@@ -57,7 +64,11 @@ public class DesignFile
     {
         DesignFile result;
 
-            javax.swing.JFileChooser file_chooser = new javax.swing.JFileChooser(p_design_dir_name);
+            // Start in the directory the last design was opened from, falling back to
+            // the directory passed in (from -dd / the startup options) when there is no
+            // remembered one yet.
+            javax.swing.JFileChooser file_chooser =
+                    new javax.swing.JFileChooser(RecentFiles.get_start_dir(p_design_dir_name));
             FileFilter file_filter = new FileFilter(all_file_extensions);
             file_chooser.setFileFilter(file_filter);
             file_chooser.showOpenDialog(null);
@@ -66,9 +77,29 @@ public class DesignFile
             {
                 return null;
             }
+            RecentFiles.add(curr_design_file);
             result = new DesignFile(curr_design_file, file_chooser);
 
         return result;
+    }
+
+    /**
+     * Wraps an already-known design file path (e.g. chosen from the recent-designs
+     * list) and records it as the most recently opened design.
+     */
+    public static DesignFile get_recent_instance(String p_design_file_name)
+    {
+        if (p_design_file_name == null)
+        {
+            return null;
+        }
+        java.io.File file = new java.io.File(p_design_file_name);
+        if (!file.exists())
+        {
+            return null;
+        }
+        RecentFiles.add(file);
+        return new DesignFile(file, null);
     }
 
     /**

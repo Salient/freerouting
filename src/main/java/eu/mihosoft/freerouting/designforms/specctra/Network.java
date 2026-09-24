@@ -401,7 +401,7 @@ public class Network extends ScopeKeyword
                     }
                     else if (next_token == Keyword.LAYER_RULE)
                     {
-                        FRLogger.warn("Netwark.read_net_scope: layer_rule not yet implemented");
+                        FRLogger.warn("Network.read_net_scope: layer_rule not yet implemented, skipping it for net '" + net_name + "'");
                         skip_scope(p_scanner);
                     }
                     else
@@ -450,6 +450,7 @@ public class Network extends ScopeKeyword
                     FRLogger.warn("Network.read_net_scope: board net not found");
                     return false;
                 }
+                eu.mihosoft.freerouting.rules.NetClass net_rule = null;
                 Iterator<Rule> it = net_rules.iterator();
                 while (it.hasNext())
                 {
@@ -459,21 +460,43 @@ public class Network extends ScopeKeyword
                         eu.mihosoft.freerouting.rules.NetClass default_net_rule = p_board.rules.get_default_net_class();
                         double wire_width = ((Rule.WidthRule) curr_ob).value;
                         int trace_halfwidth = (int) Math.round(p_coordinate_transform.dsn_to_board(wire_width) / 2);
-                        eu.mihosoft.freerouting.rules.NetClass net_rule =
-                                p_board.rules.net_classes.find(trace_halfwidth, default_net_rule.get_trace_clearance_class(),
-                                default_net_rule.get_via_rule());
                         if (net_rule == null)
                         {
-                            // create a new net rule
-                            net_rule = p_board.rules.get_new_net_class(p_locale);
+                            net_rule = p_board.rules.net_classes.find(trace_halfwidth, default_net_rule.get_trace_clearance_class(),
+                                    default_net_rule.get_via_rule());
+                            if (net_rule == null)
+                            {
+                                // create a new net rule
+                                net_rule = p_board.rules.get_new_net_class(p_locale);
+                            }
                         }
                         net_rule.set_trace_half_width(trace_halfwidth);
-                        board_net.set_class(net_rule);
+                    }
+                    else if (curr_ob instanceof Rule.ClearanceRule)
+                    {
+                        double clearance_value = ((Rule.ClearanceRule) curr_ob).value;
+                        if (net_rule == null)
+                        {
+                            // Reuse a net class already created for this clearance value instead of
+                            // minting a new "classN" for every net that shares the same (clear ...) value.
+                            String shared_class_name = "clearance_" + clearance_value;
+                            net_rule = p_board.rules.net_classes.get(shared_class_name);
+                            if (net_rule == null)
+                            {
+                                net_rule = p_board.rules.get_new_net_class(shared_class_name);
+                            }
+                        }
+                        add_clearance_rule(p_board.rules.clearance_matrix, net_rule, (Rule.ClearanceRule) curr_ob, -1, p_coordinate_transform);
                     }
                     else
                     {
-                        FRLogger.warn("Network.read_net_scope: Rule not yet implemented");
+                        FRLogger.warn("Network.read_net_scope: rule type '" + curr_ob.getClass().getSimpleName()
+                                + "' not yet implemented for net '" + net_name + "', skipping it");
                     }
+                }
+                if (net_rule != null)
+                {
+                    board_net.set_class(net_rule);
                 }
             }
             ++subnet_number;
@@ -822,7 +845,8 @@ public class Network extends ScopeKeyword
             }
             else
             {
-                FRLogger.warn("Network.insert_net_class: rule type not yet implemented");
+                FRLogger.warn("Network.insert_net_class: rule type '" + curr_rule.getClass().getSimpleName()
+                        + "' not yet implemented for net class '" + p_class.name + "', skipping it");
             }
         }
 
@@ -852,7 +876,8 @@ public class Network extends ScopeKeyword
                     }
                     else
                     {
-                        FRLogger.warn("Network.insert_net_class: layer rule type not yet implemented");
+                        FRLogger.warn("Network.insert_net_class: layer rule type '" + curr_rule.getClass().getSimpleName()
+                                + "' not yet implemented for net class '" + p_class.name + "', layer '" + curr_layer_name + "', skipping it");
                     }
                 }
             }
