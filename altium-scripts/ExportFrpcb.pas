@@ -798,6 +798,99 @@ End;
 { captures more precisely in WriteNetClasses/WriteClearanceMatrix below.      }
 {..............................................................................}
 
+{ Extracts the Nth (0-based) InNetClass('...') name from a scope expression, or ''
+  when there is no Nth one. Altium scopes are often a compound OR-list such as
+  "InNetClass('1300V') or InNetClass('900V') or InNetClass('500V')", and a rule
+  like that carries a real constraint (on this board, CHASSIS to the HV classes at
+  150 mil) that a single-name parse would silently drop. }
+Function NthNetClassName(ScopeExpr : String; N : Integer) : String;
+Var
+    Rest : String;
+    P1, P2, Found : Integer;
+Begin
+    Result := '';
+    Rest := ScopeExpr;
+    Found := 0;
+    While True Do
+    Begin
+        P1 := Pos('InNetClass(''', Rest);
+        If P1 = 0 Then Exit;
+        Rest := Copy(Rest, P1 + Length('InNetClass('''), Length(Rest));
+        P2 := Pos('''', Rest);
+        If P2 = 0 Then Exit;
+        If Found = N Then
+        Begin
+            Result := Copy(Rest, 1, P2 - 1);
+            Exit;
+        End;
+        Inc(Found);
+        Rest := Copy(Rest, P2 + 1, Length(Rest));
+    End;
+End;
+
+{ The single InNet('...') name in a scope expression, or '' if absent. A rule
+  scoped to one NET rather than a class still constrains every class it is paired
+  with, so such rules are expanded against the other side's classes. }
+Function ExtractNetName(ScopeExpr : String) : String;
+Var
+    P1, P2 : Integer;
+Begin
+    Result := '';
+    P1 := Pos('InNet(''', ScopeExpr);
+    If P1 = 0 Then Exit;
+    P1 := P1 + Length('InNet(''');
+    P2 := Pos('''', Copy(ScopeExpr, P1, Length(ScopeExpr)));
+    If P2 = 0 Then Exit;
+    Result := Copy(ScopeExpr, P1, P2 - 1);
+End;
+
+{ The largest clearance any non-matrix clearance rule imposes on this NET, or 0.
+
+  A rule scoped to a single net rather than a class cannot be a clearance_matrix
+  entry (FRPCB's matrix is class-vs-class), but it is still a real constraint: on
+  this board CHASSIS - a net, not a class - must keep 150 mil from the HV classes.
+  Emitting it as the net's own clearance override is the representable form, and
+  the maximum is taken because that is the safe reading when several rules apply. }
+Function NetClearanceOverride(Board : IPCB_Board; NetName : WideString) : TCoord;
+Var
+    Iter : IPCB_BoardIterator;
+    Rule : IPCB_ClearanceConstraint;
+    Kind : TRuleKind;
+    S1, S2 : String;
+    G    : TCoord;
+Begin
+    Result := 0;
+    Iter := Board.BoardIterator_Create;
+    Try
+        Iter.AddFilter_ObjectSet(MkSet(eRuleObject));
+        Iter.AddFilter_LayerSet(AllLayers);
+        Iter.AddFilter_Method(eProcessAll);
+        Rule := Iter.FirstPCBObject;
+        While Rule <> Nil Do
+        Begin
+            Kind := eRule_MaxMinWidth;
+            Try Kind := Rule.RuleKind; Except End;
+            If Kind = eRule_Clearance Then
+            Begin
+                S1 := ''; S2 := ''; G := 0;
+                Try S1 := Rule.Scope1Expression; Except End;
+                Try S2 := Rule.Scope2Expression; Except End;
+                Try G := Rule.Gap; Except End;
+                // Only a rule naming THIS net on one side and at least one net class
+                // on the other; a plain All/All or IsVia/IsPad rule is the board
+                // default and must not become a per-net override.
+                If (G > Result) And
+                   (((ExtractNetName(S1) = NetName) And (NthNetClassName(S2, 0) <> '')) Or
+                    ((ExtractNetName(S2) = NetName) And (NthNetClassName(S1, 0) <> ''))) Then
+                    Result := G;
+            End;
+            Rule := Iter.NextPCBObject;
+        End;
+    Finally
+        Board.BoardIterator_Destroy(Iter);
+    End;
+End;
+
 Procedure WriteNets(Board : IPCB_Board);
 Var
     NetIter  : IPCB_BoardIterator;
@@ -805,6 +898,7 @@ Var
     PinIter  : IPCB_GroupIterator;
     Pad      : IPCB_Pad;
     FirstN, FirstP : Boolean;
+    NetClr   : TCoord;
 Begin
     OutLines.Add('  "nets": [');
     FirstN := True;
@@ -841,6 +935,9 @@ Begin
                 Net.GroupIterator_Destroy(PinIter);
             End;
             OutLines.Add('      ]');
+            NetClr := NetClearanceOverride(Board, Net.Name);
+            If NetClr > 0 Then
+                OutLines.Add('      ,"rule": { "clearance": ' + CoordMils(NetClr) + ' }');
 
             Net := NetIter.NextPCBObject;
         End;
@@ -962,52 +1059,6 @@ End;
   usable nonzero width - emitting no width at all made the autorouter abort on
   load. IPCB_MaxMinWidthConstraint.PreferedWidth is Altium's spelling (one 'r').
   Returned in Coords, matching every other length this script writes. }
-{ Extracts the Nth (0-based) InNetClass('...') name from a scope expression, or ''
-  when there is no Nth one. Altium scopes are often a compound OR-list such as
-  "InNetClass('1300V') or InNetClass('900V') or InNetClass('500V')", and a rule
-  like that carries a real constraint (on this board, CHASSIS to the HV classes at
-  150 mil) that a single-name parse would silently drop. }
-Function NthNetClassName(ScopeExpr : String; N : Integer) : String;
-Var
-    Rest : String;
-    P1, P2, Found : Integer;
-Begin
-    Result := '';
-    Rest := ScopeExpr;
-    Found := 0;
-    While True Do
-    Begin
-        P1 := Pos('InNetClass(''', Rest);
-        If P1 = 0 Then Exit;
-        Rest := Copy(Rest, P1 + Length('InNetClass('''), Length(Rest));
-        P2 := Pos('''', Rest);
-        If P2 = 0 Then Exit;
-        If Found = N Then
-        Begin
-            Result := Copy(Rest, 1, P2 - 1);
-            Exit;
-        End;
-        Inc(Found);
-        Rest := Copy(Rest, P2 + 1, Length(Rest));
-    End;
-End;
-
-{ The single InNet('...') name in a scope expression, or '' if absent. A rule
-  scoped to one NET rather than a class still constrains every class it is paired
-  with, so such rules are expanded against the other side's classes. }
-Function ExtractNetName(ScopeExpr : String) : String;
-Var
-    P1, P2 : Integer;
-Begin
-    Result := '';
-    P1 := Pos('InNet(''', ScopeExpr);
-    If P1 = 0 Then Exit;
-    P1 := P1 + Length('InNet(''');
-    P2 := Pos('''', Copy(ScopeExpr, P1, Length(ScopeExpr)));
-    If P2 = 0 Then Exit;
-    Result := Copy(ScopeExpr, P1, P2 - 1);
-End;
-
 Function ClassWidth(Board : IPCB_Board; ClassName : WideString) : TCoord;
 Var
     Iter      : IPCB_BoardIterator;
