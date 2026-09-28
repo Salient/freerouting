@@ -383,13 +383,30 @@ public class FrpcbFile
             JSONArray wires_arr = routing_obj.optJSONArray("wires");
             if (wires_arr != null)
             {
+                // Vias are inserted BEFORE wires on purpose: read_wire snaps a wire's
+                // endpoints onto the centre of any same-net pad or via they already sit
+                // inside, and it can only do that for vias that exist by then.
+                JSONArray vias_first = routing_obj.optJSONArray("vias");
+                if (vias_first != null)
+                {
+                    for (int i = 0; i < vias_first.length(); ++i)
+                    {
+                        read_routed_via(vias_first.getJSONObject(i), board, padstacks_by_name, len);
+                    }
+                }
                 int zero_length_wires = 0;
+                snapped_wire_ends = 0;
                 for (int i = 0; i < wires_arr.length(); ++i)
                 {
                     if (!read_wire(wires_arr.getJSONObject(i), board, layer_no_by_name, len))
                     {
                         ++zero_length_wires;
                     }
+                }
+                if (snapped_wire_ends > 0)
+                {
+                    FRLogger.info("Snapped " + snapped_wire_ends + " wire end(s) onto the centre of"
+                            + " a pad or via they already overlapped, so the connection registers");
                 }
                 if (zero_length_wires > 0)
                 {
@@ -402,14 +419,7 @@ public class FrpcbFile
                             + " (zero-length Altium tracks, which connect nothing)");
                 }
             }
-            JSONArray routing_vias_arr = routing_obj.optJSONArray("vias");
-            if (routing_vias_arr != null)
-            {
-                for (int i = 0; i < routing_vias_arr.length(); ++i)
-                {
-                    read_routed_via(routing_vias_arr.getJSONObject(i), board, padstacks_by_name, len);
-                }
-            }
+            // (routing vias were inserted above, before the wires)
             for (int net_no = 1; net_no <= board.rules.nets.max_net_no(); ++net_no)
             {
                 try
@@ -1340,6 +1350,54 @@ public class FrpcbFile
                 clearance_class, false, FixedState.SYSTEM_FIXED);
     }
 
+
+    /** Counts the wire ends moved onto a pad centre, for one summary line per import. */
+    private static int snapped_wire_ends = 0;
+
+    /**
+     * Returns the centre of a same-net pin or via on p_layer whose shape contains p_corner, or
+     * p_corner unchanged when there is none.
+     *
+     * <p>Deliberately conservative: it only moves an endpoint that is ALREADY inside the pad,
+     * so a wire is never dragged onto something it did not touch. That is exactly the case
+     * Altium produces and freerouting's exact-coincidence contact test rejects.
+     */
+    private static IntPoint snap_to_pad_center(IntPoint p_corner, int p_layer, Net p_net, RoutingBoard p_board)
+    {
+        if (p_corner == null || p_net == null)
+        {
+            return p_corner;
+        }
+        try
+        {
+            eu.mihosoft.freerouting.board.ItemSelectionFilter filter =
+                    new eu.mihosoft.freerouting.board.ItemSelectionFilter(
+                            new eu.mihosoft.freerouting.board.ItemSelectionFilter.SelectableChoices[]{
+                                    eu.mihosoft.freerouting.board.ItemSelectionFilter.SelectableChoices.PINS,
+                                    eu.mihosoft.freerouting.board.ItemSelectionFilter.SelectableChoices.VIAS});
+            for (eu.mihosoft.freerouting.board.Item curr_item : p_board.pick_items(p_corner, p_layer, filter))
+            {
+                if (!(curr_item instanceof eu.mihosoft.freerouting.board.DrillItem)
+                        || !curr_item.contains_net(p_net.net_number))
+                {
+                    continue;
+                }
+                Point center = ((eu.mihosoft.freerouting.board.DrillItem) curr_item).get_center();
+                if (center instanceof IntPoint && !center.equals(p_corner))
+                {
+                    ++snapped_wire_ends;
+                    return (IntPoint) center;
+                }
+                return p_corner;
+            }
+        }
+        catch (Exception e)
+        {
+            // A failed lookup must not stop the wire being imported.
+        }
+        return p_corner;
+    }
+
     /**
      * Inserts one routed wire. Returns false when the wire was a zero-length Altium track and
      * was therefore skipped, so the caller can report those once rather than individually.
@@ -1375,6 +1433,16 @@ public class FrpcbFile
             JSONArray point = path.getJSONArray(i);
             corners[i] = p_len.to_board_point(point.getDouble(0), point.getDouble(1));
         }
+        // Snap the two ends onto the centre of any same-net pad or via they already sit
+        // inside. Trace.get_normal_contacts requires a trace endpoint to EQUAL the centre of
+        // a pin or via, or the endpoint of another trace, before it counts as connected -
+        // overlapping the pad is not enough. Altium's connectivity is geometric, so its
+        // routes legitimately stop short of, or run past, the pad centre, and every one of
+        // those arrived here as a phantom incomplete connection.
+        corners[0] = snap_to_pad_center(corners[0], layer_no, board_net, p_board);
+        corners[corners.length - 1] =
+                snap_to_pad_center(corners[corners.length - 1], layer_no, board_net, p_board);
+
         Polygon polygon = new Polygon(corners);
         if (polygon.corner_array().length < 2)
         {
