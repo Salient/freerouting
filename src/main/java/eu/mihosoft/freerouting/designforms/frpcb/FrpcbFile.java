@@ -312,6 +312,7 @@ public class FrpcbFile
                 }
             }
             assign_net_classes(net_classes_arr, board, net_classes_by_name);
+            apply_default_trace_width(net_classes_arr, board, len);
         }
 
         // Clearance matrix: the pairwise class-to-class rules this format exists to carry.
@@ -791,6 +792,49 @@ public class FrpcbFile
                 }
             }
         }
+    }
+
+    /**
+     * Pushes the narrowest net-class trace width through BoardRules, not just onto the
+     * individual NetClass objects.
+     *
+     * <p>This is not cosmetic bookkeeping. BoardRules.min_trace_half_width starts at a
+     * sentinel 100000 internal units -- 1000 mil -- and is only ever narrowed by
+     * set_default_trace_half_width(s). read_net_class calls NetClass.set_trace_half_width
+     * directly, which does not touch it, so before this the sentinel survived import.
+     *
+     * <p>That value is then used as a DRAWING scale. The ratsnest's layer-change marker is a
+     * 45-degree line 2x it, and a clearance-violation circle is 5x it, so on a 5000 mil board
+     * every air line between two layers drew a 5657 mil diagonal: the board vanished under
+     * criss-crossed lines running well past its edges. It also feeds the autorouter's own
+     * width decisions, so leaving it at 1000 mil was wrong quite apart from the display.
+     */
+    private static void apply_default_trace_width(JSONArray p_net_classes, RoutingBoard p_board, LengthConverter p_len)
+    {
+        int min_half_width = Integer.MAX_VALUE;
+        for (int i = 0; i < p_net_classes.length(); ++i)
+        {
+            JSONObject nc_obj = p_net_classes.getJSONObject(i);
+            if (!nc_obj.has("width"))
+            {
+                continue;
+            }
+            int half_width = (int) Math.round(p_len.to_board(nc_obj.getDouble("width") / 2));
+            if (half_width > 0)
+            {
+                min_half_width = Math.min(min_half_width, half_width);
+            }
+        }
+        if (min_half_width == Integer.MAX_VALUE)
+        {
+            FRLogger.warn("FrpcbFile: no net class declares a usable width; leaving the default"
+                    + " trace width alone, which will leave ratsnest and violation markers"
+                    + " drawn at board scale");
+            return;
+        }
+        p_board.rules.set_default_trace_half_widths(min_half_width);
+        FRLogger.info("Default trace half width set to " + min_half_width
+                + " internal units (" + p_len.to_file_mil(min_half_width) + " mil)");
     }
 
     /**
@@ -1357,6 +1401,12 @@ public class FrpcbFile
         double to_board_mil(double p_value_in_mil)
         {
             return transform.dsn_to_board(p_value_in_mil);
+        }
+
+        /** Internal board units back to mil, for logging. */
+        double to_file_mil(double p_value_in_board_units)
+        {
+            return Math.round(transform.board_to_dsn(p_value_in_board_units) * 100) / 100.0;
         }
 
         IntPoint to_board_point(double p_x, double p_y)

@@ -37,6 +37,14 @@ public class ScreenMessages
     public ScreenMessages(JLabel p_status_field, JLabel p_add_field,
             JLabel p_layer_field, JLabel p_mouse_position, java.util.Locale p_locale)
     {
+        this(p_status_field, p_add_field, p_layer_field, p_mouse_position, null, p_locale);
+    }
+
+    /** As above, with a field for the net under the cursor. */
+    public ScreenMessages(JLabel p_status_field, JLabel p_add_field,
+            JLabel p_layer_field, JLabel p_mouse_position, JLabel p_net_field, java.util.Locale p_locale)
+    {
+        net_field = p_net_field;
         resources = java.util.ResourceBundle.getBundle("eu.mihosoft.freerouting.interactive.ScreenMessages", p_locale);
         locale = p_locale;
         active_layer_string = resources.getString("current_layer") + " ";
@@ -51,6 +59,19 @@ public class ScreenMessages
         this.number_format.setMaximumFractionDigits(4);
     }
     
+    /**
+     * Shows the net under the cursor, or clears the field when p_text is null. Not
+     * write-protect aware on purpose: this is a passive readout, not a prompt, so it should
+     * keep tracking the cursor even while another operation owns the status line.
+     */
+    public void set_net_under_cursor(String p_text)
+    {
+        if (net_field != null)
+        {
+            net_field.setText(p_text == null ? empty_string : p_text);
+        }
+    }
+
     /**
      * Sets the message in the status field.
      */
@@ -177,6 +198,8 @@ public class ScreenMessages
     private JLabel status_field;
     private JLabel layer_field;
     private JLabel mouse_position;
+    /** Shows the net under the cursor; null when the host did not supply a field for it. */
+    private final JLabel net_field;
     private String prev_target_layer_name = empty_string;
     private boolean write_protected = false;
     

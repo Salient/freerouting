@@ -493,10 +493,60 @@ public class MainApplication extends javax.swing.JFrame
             {
                 FRLogger.info("  " + worst.get(i).replace('\t', ' ') + " incomplete");
             }
+            dump_airlines(handling, board);
         }
         catch (Exception e)
         {
             FRLogger.warn("Could not count incomplete connections: " + e);
+        }
+    }
+
+    /**
+     * Writes every ratsnest air line to logs/airlines.txt: net, both endpoints in board
+     * units, and the item types at each end. The air lines are the diagonal overlay on the
+     * board, and this is what makes their geometry inspectable rather than guessable.
+     */
+    private static void dump_airlines(eu.mihosoft.freerouting.interactive.BoardHandling p_handling,
+                                      eu.mihosoft.freerouting.board.BasicBoard p_board)
+    {
+        java.io.File out = new java.io.File("logs/airlines.txt");
+        try
+        {
+            if (out.getParentFile() != null)
+            {
+                out.getParentFile().mkdirs();
+            }
+            java.io.PrintWriter writer = new java.io.PrintWriter(out, "UTF-8");
+            try
+            {
+                writer.println("# net\tfrom_x\tfrom_y\tto_x\tto_y\tlength\tfrom_item\tto_item");
+                eu.mihosoft.freerouting.designforms.specctra.CoordinateTransform transform =
+                        p_board.communication.coordinate_transform;
+                for (eu.mihosoft.freerouting.interactive.RatsNest.AirLine line
+                        : p_handling.get_ratsnest().get_airlines())
+                {
+                    double[] from = transform.board_to_dsn(line.from_corner);
+                    double[] to = transform.board_to_dsn(line.to_corner);
+                    double length = Math.hypot(to[0] - from[0], to[1] - from[1]);
+                    writer.println((line.net == null ? "?" : line.net.name)
+                            + "\t" + Math.round(from[0] * 100) / 100.0
+                            + "\t" + Math.round(from[1] * 100) / 100.0
+                            + "\t" + Math.round(to[0] * 100) / 100.0
+                            + "\t" + Math.round(to[1] * 100) / 100.0
+                            + "\t" + Math.round(length * 100) / 100.0
+                            + "\t" + (line.from_item == null ? "?" : line.from_item.getClass().getSimpleName())
+                            + "\t" + (line.to_item == null ? "?" : line.to_item.getClass().getSimpleName()));
+                }
+            }
+            finally
+            {
+                writer.close();
+            }
+            FRLogger.info("Wrote the ratsnest air lines to " + out.getPath());
+        }
+        catch (Exception e)
+        {
+            FRLogger.warn("Could not write the air line dump: " + e);
         }
     }
 

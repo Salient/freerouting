@@ -347,6 +347,63 @@ public class BoardHandling extends BoardHandlingImpl
      * skipping non-signal layers, and stopping at the outermost signal layer rather than
      * wrapping around. Bound to ctrl + mouse wheel and to the '+' / '-' keys.
      */
+    /**
+     * Puts the net of the item under the cursor, and how many of its connections are still
+     * incomplete, into the status bar.
+     *
+     * <p>Runs on every mouse move, so it does no work it can avoid: it reuses the already
+     * built ratsnest rather than forcing one, and skips the status update entirely when the
+     * item under the cursor has not changed.
+     */
+    private void show_net_under_cursor()
+    {
+        if (screen_messages == null || board == null || current_mouse_position == null)
+        {
+            return;
+        }
+        String text = "";
+        try
+        {
+            java.util.Set<eu.mihosoft.freerouting.board.Item> picked = pick_items(current_mouse_position);
+            eu.mihosoft.freerouting.rules.Net net = null;
+            for (eu.mihosoft.freerouting.board.Item curr_item : picked)
+            {
+                if (curr_item.net_count() > 0)
+                {
+                    net = board.rules.nets.get(curr_item.get_net_no(0));
+                    if (net != null)
+                    {
+                        break;
+                    }
+                }
+            }
+            if (net != null)
+            {
+                text = net.name;
+                // Only report incompletes off an existing ratsnest: building one here would
+                // stall the pointer on a large board.
+                if (ratsnest != null)
+                {
+                    int incomplete = ratsnest.incomplete_count(net.net_number);
+                    text += "  (" + incomplete + " incomplete)";
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            // A readout is never worth breaking mouse handling over.
+            text = "";
+        }
+        if (!text.equals(this.net_under_cursor_text))
+        {
+            this.net_under_cursor_text = text;
+            screen_messages.set_net_under_cursor(text);
+        }
+    }
+
+    /** Last text pushed to the net-under-cursor field, to avoid redundant repaints. */
+    private String net_under_cursor_text = "";
+
     public void cycle_current_layer(int p_signed_step)
     {
         if (board_is_read_only)
@@ -919,6 +976,7 @@ public class BoardHandling extends BoardHandlingImpl
         {
             this.current_mouse_position =
                     graphics_context.coordinate_transform.screen_to_board(p_point);
+            show_net_under_cursor();
             InteractiveState return_state = interactive_state.mouse_moved();
             // An automatic repaint here would slow down the display
             // performance in interactive route.
