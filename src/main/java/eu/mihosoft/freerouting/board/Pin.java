@@ -507,7 +507,10 @@ public class Pin extends DrillItem implements java.io.Serializable
         java.awt.Color[] result;
         if (this.net_count() > 0)
         {
-            result = p_graphics_context.get_pin_colors();
+            // A pad is drawn as the trace colour of its layer, tinted brown, so it reads as
+            // the copper of that layer rather than as a colour of its own. Deliberately
+            // darker than a copper pour, which is lightened instead.
+            result = p_graphics_context.get_pad_colors_from_traces();
         }
         else
         {

@@ -533,6 +533,115 @@ public class GraphicsContext implements java.io.Serializable
         return item_color_table.get_conduction_colors();
     }
 
+    /**
+     * Brown that component pads are pulled toward, so a pad reads as "the copper of this
+     * layer, but a pad" rather than as a separate colour to learn.
+     */
+    private static final Color PAD_TINT = new Color(154, 94, 46);
+
+    /**
+     * Pads and pours are kept apart by BRIGHTNESS rather than by hue, so the two can never
+     * be confused whatever the layer's trace colour or a pour's per-net tint happens to be:
+     * a pad is always a little darker than its layer's trace colour and a pour always
+     * lighter. Both are scaled from the base colour rather than pinned to fixed levels --
+     * forcing pours to an absolute brightness turned them into a near-white haze that
+     * obscured the traces underneath.
+     */
+    // 0.75 rather than something closer to 1: at 0.85 a dark teal trace colour produced a
+    // pad and a pour only 59 apart in RGB, which is too close to tell apart at a glance.
+    // 0.75 keeps the worst case over the whole palette at 72. See ItemTintTest.
+    private static final double PAD_BRIGHTNESS_SCALE = 0.75;
+    private static final double POUR_BRIGHTNESS_SCALE = 1.25;
+    private static final double POUR_BRIGHTNESS_LIFT = 0.15;
+    private static final float MIN_PAD_BRIGHTNESS = 0.12f;
+    private static final float MAX_PAD_BRIGHTNESS = 0.60f;
+    private static final float MIN_POUR_BRIGHTNESS = 0.40f;
+    private static final float MAX_POUR_BRIGHTNESS = 0.95f;
+
+    /**
+     * Component-pad colours for every layer, derived from that layer's trace colour and
+     * tinted brown. Deriving rather than using a separate palette means a pad always
+     * matches the copper it sits in.
+     */
+    public Color[] get_pad_colors_from_traces()
+    {
+        Color[] trace_colors = get_trace_colors(false);
+        Color[] result = new Color[trace_colors.length];
+        for (int i = 0; i < trace_colors.length; ++i)
+        {
+            result[i] = pad_color(trace_colors[i]);
+        }
+        return result;
+    }
+
+    /**
+     * Copper-pour colours for every layer: that layer's trace colour, lightened, and nudged
+     * by a small amount that depends only on p_net_no, so two pours on the same layer but
+     * different nets are visibly distinguishable while both still read as that layer.
+     */
+    public Color[] get_pour_colors_from_traces(int p_net_no)
+    {
+        Color[] trace_colors = get_trace_colors(false);
+        Color[] result = new Color[trace_colors.length];
+        for (int i = 0; i < trace_colors.length; ++i)
+        {
+            result[i] = pour_color(trace_colors[i], p_net_no);
+        }
+        return result;
+    }
+
+    static Color pad_color(Color p_trace_color)
+    {
+        if (p_trace_color == null)
+        {
+            return PAD_TINT;
+        }
+        Color blended = blend(p_trace_color, PAD_TINT, 0.4);
+        float[] base = Color.RGBtoHSB(p_trace_color.getRed(), p_trace_color.getGreen(),
+                p_trace_color.getBlue(), null);
+        float[] hsb = Color.RGBtoHSB(blended.getRed(), blended.getGreen(), blended.getBlue(), null);
+        // A shade darker than the layer's own copper, and never bright enough to be mistaken
+        // for a pour.
+        float brightness = clamp((float) (base[2] * PAD_BRIGHTNESS_SCALE),
+                MIN_PAD_BRIGHTNESS, MAX_PAD_BRIGHTNESS);
+        return Color.getHSBColor(hsb[0], hsb[1], brightness);
+    }
+
+    static Color pour_color(Color p_trace_color, int p_net_no)
+    {
+        if (p_trace_color == null)
+        {
+            return Color.LIGHT_GRAY;
+        }
+        float[] hsb = Color.RGBtoHSB(p_trace_color.getRed(), p_trace_color.getGreen(),
+                p_trace_color.getBlue(), null);
+        // A deterministic spread from the net number: multiplying by a large odd constant
+        // and taking the high bits scatters adjacent net numbers instead of walking the hue
+        // wheel in order, so neighbouring nets do not come out nearly identical.
+        double spread = ((p_net_no * 2654435761L) >>> 11) % 1000 / 1000.0;
+        float hue = (float) (((hsb[0] + (spread - 0.5) * 0.10) % 1.0 + 1.0) % 1.0);
+        // Lighter and less saturated than the layer's copper, but still recognisably that
+        // layer's colour -- desaturating all the way to white made the board unreadable.
+        float saturation = (float) (hsb[1] * (0.50 + 0.15 * spread));
+        float brightness = clamp((float) Math.max(hsb[2] * POUR_BRIGHTNESS_SCALE,
+                hsb[2] + POUR_BRIGHTNESS_LIFT), MIN_POUR_BRIGHTNESS, MAX_POUR_BRIGHTNESS);
+        return Color.getHSBColor(hue, Math.min(saturation, 1f), brightness);
+    }
+
+    private static float clamp(float p_value, float p_min, float p_max)
+    {
+        return Math.max(p_min, Math.min(p_max, p_value));
+    }
+
+    private static Color blend(Color p_from, Color p_to, double p_amount)
+    {
+        double keep = 1.0 - p_amount;
+        return new Color(
+                (int) Math.round(p_from.getRed() * keep + p_to.getRed() * p_amount),
+                (int) Math.round(p_from.getGreen() * keep + p_to.getGreen() * p_amount),
+                (int) Math.round(p_from.getBlue() * keep + p_to.getBlue() * p_amount));
+    }
+
     public Color[] get_obstacle_colors()
     {
         return item_color_table.get_obstacle_colors();

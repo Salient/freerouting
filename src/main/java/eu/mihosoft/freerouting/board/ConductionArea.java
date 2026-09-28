@@ -176,7 +176,10 @@ public class ConductionArea extends ObstacleArea implements Connectable
     
     public java.awt.Color[] get_draw_colors(eu.mihosoft.freerouting.boardgraphics.GraphicsContext p_graphics_context)
     {
-        return p_graphics_context.get_conduction_colors();
+        // A pour is drawn as the trace colour of its layer, lightened, and nudged by a
+        // per-net amount so two pours on the same layer are told apart. The lightening also
+        // keeps pours clear of the brown-tinted component pads on every layer.
+        return p_graphics_context.get_pour_colors_from_traces(this.net_count() > 0 ? this.get_net_no(0) : 0);
     }
     
     public double get_draw_intensity(eu.mihosoft.freerouting.boardgraphics.GraphicsContext p_graphics_context)
