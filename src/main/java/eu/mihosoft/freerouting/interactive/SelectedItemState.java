@@ -73,6 +73,10 @@ public class SelectedItemState extends InteractiveState
             return null;
         }
         SelectedItemState new_state = new SelectedItemState(p_item_list, p_parent_state, p_board_handling, p_activityReplayFile);
+        // Selecting a trace on another layer makes that layer active. Done here because
+        // this is the single funnel every kind of selection goes through - click, region
+        // select, the right-click menu, and the Nets / Length Violations windows.
+        p_board_handling.set_current_layer_from_selection(p_item_list);
         return new_state;
     }
 

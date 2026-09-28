@@ -160,44 +160,24 @@ public class MenuState extends InteractiveState
         }
         else if (p_key_char == 'w')
         {
+            // Route mode, alongside the older 'r'. 'w' pairs with 's' for select and 'd' for
+            // drag, which is the layout most PCB tools use.
+            curr_return_state = RouteMenuState.get_instance(hdlg, activityReplayFile);
+        }
+        else if (p_key_char == 'x')
+        {
+            // Swap two pins. Moved off 'w', which is now route mode; 'x' was unused.
             curr_return_state = swap_pin(hdlg.get_current_mouse_position());
         }
         else if (p_key_char == '+')
         {
             // increase the current layer to the next signal layer
-            eu.mihosoft.freerouting.board.LayerStructure layer_structure = hdlg.get_routing_board().layer_structure;
-            int current_layer_no = hdlg.settings.layer;
-            for(;;)
-            {
-                ++current_layer_no;
-                if (current_layer_no >=  layer_structure.arr.length || layer_structure.arr[current_layer_no].is_signal)
-                {
-                    break;
-                }
-            }
-            if (current_layer_no < layer_structure.arr.length)
-            {
-                hdlg.set_current_layer(current_layer_no);
-            }
+            hdlg.cycle_current_layer(1);
         }
         else if (p_key_char == '-')
         {
             // decrease the current layer to the previous signal layer
-            eu.mihosoft.freerouting.board.LayerStructure layer_structure = hdlg.get_routing_board().layer_structure;
-            int current_layer_no = hdlg.settings.layer;
-            for(;;)
-            {
-                --current_layer_no;
-                if (current_layer_no < 0 || layer_structure.arr[current_layer_no].is_signal)
-                {
-                    break;
-                }
-            }
-            if (current_layer_no >= 0)
-            {
-                hdlg.set_current_layer(current_layer_no);
-            }
-            
+            hdlg.cycle_current_layer(-1);
         }
         else
         {

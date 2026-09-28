@@ -342,6 +342,102 @@ public class BoardHandling extends BoardHandlingImpl
      * Changes the current layer without saving the change to logfile.
      * Only for internal use inside this package.
      */
+    /**
+     * Moves the current layer p_signed_step signal layers up (positive) or down (negative),
+     * skipping non-signal layers, and stopping at the outermost signal layer rather than
+     * wrapping around. Bound to ctrl + mouse wheel and to the '+' / '-' keys.
+     */
+    public void cycle_current_layer(int p_signed_step)
+    {
+        if (board_is_read_only)
+        {
+            return;
+        }
+        int layer_no = stepped_signal_layer(board.layer_structure, settings.layer, p_signed_step);
+        if (layer_no != settings.layer)
+        {
+            set_current_layer(layer_no);
+        }
+    }
+
+    /**
+     * The layer p_signed_step signal layers away from p_from_layer, skipping non-signal
+     * layers and stopping at the outermost signal layer rather than wrapping. Returns
+     * p_from_layer when there is nowhere to go. Pure, so it is unit tested directly.
+     */
+    static int stepped_signal_layer(eu.mihosoft.freerouting.board.LayerStructure p_layer_structure,
+                                    int p_from_layer, int p_signed_step)
+    {
+        if (p_layer_structure == null || p_signed_step == 0)
+        {
+            return p_from_layer;
+        }
+        int step = p_signed_step > 0 ? 1 : -1;
+        int layer_no = p_from_layer;
+        for (int i = 0; i < Math.abs(p_signed_step); ++i)
+        {
+            int candidate = layer_no;
+            for (;;)
+            {
+                candidate += step;
+                if (candidate < 0 || candidate >= p_layer_structure.arr.length
+                        || p_layer_structure.arr[candidate].is_signal)
+                {
+                    break;
+                }
+            }
+            if (candidate < 0 || candidate >= p_layer_structure.arr.length)
+            {
+                // Already on the outermost signal layer in this direction.
+                break;
+            }
+            layer_no = candidate;
+        }
+        return layer_no;
+    }
+
+    /**
+     * Switches the current layer to the layer of a selection, so that clicking a trace on
+     * another layer makes that layer active.
+     *
+     * <p>Only acts when the selection identifies exactly one signal layer: an item spanning
+     * several layers (a via, a through-hole pin) does not name a layer to switch to, and a
+     * selection straddling two layers would make the choice arbitrary. In both cases the
+     * current layer is left alone rather than guessed at.
+     */
+    public void set_current_layer_from_selection(java.util.Collection<eu.mihosoft.freerouting.board.Item> p_items)
+    {
+        if (board_is_read_only || p_items == null)
+        {
+            return;
+        }
+        int found_layer = -1;
+        for (eu.mihosoft.freerouting.board.Item curr_item : p_items)
+        {
+            if (curr_item.first_layer() != curr_item.last_layer())
+            {
+                continue;
+            }
+            int curr_layer = curr_item.first_layer();
+            if (curr_layer < 0 || curr_layer >= board.layer_structure.arr.length
+                    || !board.layer_structure.arr[curr_layer].is_signal)
+            {
+                continue;
+            }
+            if (found_layer >= 0 && found_layer != curr_layer)
+            {
+                // Selection spans more than one layer; no single layer to switch to.
+                return;
+            }
+            found_layer = curr_layer;
+        }
+        if (found_layer >= 0 && found_layer != settings.layer
+                && graphics_context.get_layer_visibility(found_layer) > 0)
+        {
+            set_current_layer(found_layer);
+        }
+    }
+
     void set_layer(int p_layer_no)
     {
         eu.mihosoft.freerouting.board.Layer curr_layer = board.layer_structure.arr[p_layer_no];

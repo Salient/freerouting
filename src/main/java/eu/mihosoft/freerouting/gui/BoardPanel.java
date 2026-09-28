@@ -117,6 +117,18 @@ public class BoardPanel extends javax.swing.JPanel
         {
             public void mouseWheelMoved(java.awt.event.MouseWheelEvent evt)
             {
+                // ctrl + wheel cycles the active signal layer instead of zooming, which is
+                // the usual convention in PCB editors and avoids reaching for +/- while
+                // routing with the mouse.
+                if ((evt.getModifiersEx() & java.awt.event.InputEvent.CTRL_DOWN_MASK) != 0)
+                {
+                    // getWheelRotation() is negative when the wheel turns away from the
+                    // user, and layer 0 is the top layer, so passing the rotation through
+                    // unchanged makes scrolling away move up the stack.
+                    board_handling.cycle_current_layer(evt.getWheelRotation());
+                    repaint();
+                    return;
+                }
                 // Ensure the current mouse position is up to date before zooming:
                 // a wheel event can arrive without any preceding mouseMoved event
                 // (e.g. scrolling without moving the pointer), which would otherwise
