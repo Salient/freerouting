@@ -361,6 +361,18 @@ public class BoardHandling extends BoardHandlingImpl
         {
             return;
         }
+        // Stay quiet while the autorouter is running: it reports progress through the
+        // neighbouring status fields several times a second, and a net name appearing and
+        // disappearing next to those counters makes the whole line hard to read.
+        if (interactive_action_thread != null)
+        {
+            if (!this.net_under_cursor_text.isEmpty())
+            {
+                this.net_under_cursor_text = "";
+                screen_messages.set_net_under_cursor("");
+            }
+            return;
+        }
         String text = "";
         try
         {
@@ -413,7 +425,12 @@ public class BoardHandling extends BoardHandlingImpl
         int layer_no = stepped_signal_layer(board.layer_structure, settings.layer, p_signed_step);
         if (layer_no != settings.layer)
         {
-            set_current_layer(layer_no);
+            // change_layer_action, not set_current_layer: it dispatches through the interactive
+            // state, so while a trace is being routed RouteState inserts the via that the layer
+            // change requires. set_current_layer only moves the active layer, which left a
+            // manually routed trace jumping layers with nothing connecting the two halves --
+            // unlike the right-click Change Layer menu, which has always gone through here.
+            change_layer_action(layer_no);
         }
     }
 

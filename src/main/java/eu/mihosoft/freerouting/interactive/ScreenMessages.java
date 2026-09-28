@@ -37,14 +37,16 @@ public class ScreenMessages
     public ScreenMessages(JLabel p_status_field, JLabel p_add_field,
             JLabel p_layer_field, JLabel p_mouse_position, java.util.Locale p_locale)
     {
-        this(p_status_field, p_add_field, p_layer_field, p_mouse_position, null, p_locale);
+        this(p_status_field, p_add_field, p_layer_field, p_mouse_position, null, null, p_locale);
     }
 
-    /** As above, with a field for the net under the cursor. */
+    /** As above, with fields for the net under the cursor and the autorouter pass number. */
     public ScreenMessages(JLabel p_status_field, JLabel p_add_field,
-            JLabel p_layer_field, JLabel p_mouse_position, JLabel p_net_field, java.util.Locale p_locale)
+            JLabel p_layer_field, JLabel p_mouse_position, JLabel p_net_field, JLabel p_pass_field,
+            java.util.Locale p_locale)
     {
         net_field = p_net_field;
+        pass_field = p_pass_field;
         resources = java.util.ResourceBundle.getBundle("eu.mihosoft.freerouting.interactive.ScreenMessages", p_locale);
         locale = p_locale;
         active_layer_string = resources.getString("current_layer") + " ";
@@ -60,15 +62,44 @@ public class ScreenMessages
     }
     
     /**
+     * Shows the autorouter's pass number in its own fixed field; a number {@literal <=} 0
+     * clears it. Kept out of the status message so that prose does not change length, and get
+     * truncated, on every pass.
+     */
+    public void set_pass_number(int p_pass_no)
+    {
+        if (pass_field != null)
+        {
+            pass_field.setText(p_pass_no > 0
+                    ? resources.getString("pass") + " " + p_pass_no
+                    : empty_string);
+        }
+    }
+
+    /**
      * Shows the net under the cursor, or clears the field when p_text is null. Not
      * write-protect aware on purpose: this is a passive readout, not a prompt, so it should
      * keep tracking the cursor even while another operation owns the status line.
      */
     public void set_net_under_cursor(String p_text)
     {
-        if (net_field != null)
+        if (net_field == null)
         {
-            net_field.setText(p_text == null ? empty_string : p_text);
+            return;
+        }
+        String text = p_text == null ? "" : p_text;
+        net_field.setText(text);
+        // Collapse to nothing when there is no net, so the field only takes space while it has
+        // something to say. Fixed at NET_FIELD_WIDTH otherwise, so a longer or shorter net name
+        // cannot shove the message line about.
+        int height = net_field.getPreferredSize().height;
+        int width = text.isEmpty() ? 0 : NET_FIELD_WIDTH;
+        net_field.setPreferredSize(new java.awt.Dimension(width, height));
+        net_field.setMinimumSize(new java.awt.Dimension(width, height));
+        net_field.setMaximumSize(new java.awt.Dimension(width, height));
+        if (net_field.getParent() != null)
+        {
+            net_field.getParent().revalidate();
         }
     }
 
@@ -151,7 +182,10 @@ public class ScreenMessages
         {
             return;
         }
-        this.mouse_position.setText(p_pos.to_string(this.locale));
+        // "x= 1234.5  y= 987.6" rather than FloatPoint.to_string's "(1234.5, 987.6)": shorter,
+        // and it says which number is which.
+        this.mouse_position.setText("x= " + this.number_format.format(p_pos.x)
+                + "  y= " + this.number_format.format(p_pos.y));
     }
     
     /**
@@ -177,6 +211,7 @@ public class ScreenMessages
             status_field.setText(empty_string);
             clear_add_field();
             layer_field.setText(empty_string);
+            set_pass_number(0);
         }
     }
     
@@ -193,6 +228,8 @@ public class ScreenMessages
     private final String active_layer_string;
     private final String target_layer_string;
     static private final String empty_string = "            ";
+    /** Room for "5V0 SAFETY (63 incomplete)", measured at 191 pixels plus padding. */
+    static private final int NET_FIELD_WIDTH = 210;
     
     private JLabel add_field;
     private JLabel status_field;
@@ -200,6 +237,8 @@ public class ScreenMessages
     private JLabel mouse_position;
     /** Shows the net under the cursor; null when the host did not supply a field for it. */
     private final JLabel net_field;
+    /** Shows the autorouter pass number; null when the host supplied no field for it. */
+    private final JLabel pass_field;
     private String prev_target_layer_name = empty_string;
     private boolean write_protected = false;
     

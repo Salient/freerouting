@@ -135,8 +135,12 @@ public class BatchAutorouter
                 break;
             }
 
-            String start_message = resources.getString("batch_autorouter") + " " + resources.getString("stop_message") + "        " + resources.getString("pass") + " " + curr_pass_no.toString() + ": ";
-            hdlg.screen_messages.set_status_message(start_message);
+            // The pass number goes in its own status field, not concatenated onto the prose:
+            // appending it made the message change width every pass and pushed its tail out of
+            // view.
+            hdlg.screen_messages.set_status_message(
+                    resources.getString("batch_autorouter") + " " + resources.getString("stop_message"));
+            hdlg.screen_messages.set_pass_number(curr_pass_no);
 
             BasicBoard boardBefore = this.routing_board.clone();
 

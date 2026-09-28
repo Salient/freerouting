@@ -144,7 +144,7 @@ public class BoardFrame extends javax.swing.JFrame
         this.screen_messages =
                 new ScreenMessages(this.message_panel.status_message, this.message_panel.add_message,
                 this.message_panel.current_layer, this.message_panel.mouse_position,
-                this.message_panel.net_info, this.locale);
+                this.message_panel.net_info, this.message_panel.pass_message, this.locale);
         
         this.scroll_pane = new javax.swing.JScrollPane();
         this.scroll_pane.setPreferredSize(new java.awt.Dimension(1150, 800));

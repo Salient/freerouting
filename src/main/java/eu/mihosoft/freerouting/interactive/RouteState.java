@@ -308,40 +308,13 @@ public class RouteState extends InteractiveState
         }
         else if (p_key_char == '+')
         {
-            // change to the next signal layer
-            eu.mihosoft.freerouting.board.LayerStructure layer_structure = hdlg.get_routing_board().layer_structure;
-            int current_layer_no = hdlg.settings.layer;
-            for (;;)
-            {
-                ++current_layer_no;
-                if (current_layer_no >= layer_structure.arr.length || layer_structure.arr[current_layer_no].is_signal)
-                {
-                    break;
-                }
-            }
-            if (current_layer_no < layer_structure.arr.length)
-            {
-                change_layer_action(current_layer_no);
-            }
+            // change to the next signal layer, inserting a via
+            hdlg.cycle_current_layer(1);
         }
         else if (p_key_char == '-')
         {
-            // change to the to the previous signal layer
-            eu.mihosoft.freerouting.board.LayerStructure layer_structure = hdlg.get_routing_board().layer_structure;
-            int current_layer_no = hdlg.settings.layer;
-            for (;;)
-            {
-                --current_layer_no;
-                if (current_layer_no < 0 || layer_structure.arr[current_layer_no].is_signal)
-                {
-                    break;
-                }
-            }
-            if (current_layer_no >= 0)
-            {
-                change_layer_action(current_layer_no);
-            }
-
+            // change to the previous signal layer, inserting a via
+            hdlg.cycle_current_layer(-1);
         }
         else
         {

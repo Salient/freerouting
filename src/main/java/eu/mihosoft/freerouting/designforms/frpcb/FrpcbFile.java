@@ -1200,6 +1200,15 @@ public class FrpcbFile
                 String net_name = pin_obj.optString("net", null);
                 int[] net_no_arr;
                 NetClass net_class = p_board.rules.get_default_net_class();
+                // An empty net is not an unknown net: Altium writes "" for a pad that is
+                // simply not connected to anything (fiducials, mechanical pads, unused IC
+                // pins), and the exporter passes that through. Treating it as a lookup
+                // failure produced a warning per unconnected pad - 106 of them on the
+                // reference board - which buried the warnings that do mean something.
+                if (net_name != null && net_name.trim().isEmpty())
+                {
+                    net_name = null;
+                }
                 if (net_name != null)
                 {
                     Net board_net = p_board.rules.nets.get(net_name, 1);
