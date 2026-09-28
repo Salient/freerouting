@@ -174,6 +174,12 @@ public class ShapeSearchTree90Degree extends ShapeSearchTree
         // opposite of this line.
         
         Collection<IncompleteFreeSpaceExpansionRoom> result = new LinkedList<IncompleteFreeSpaceExpansionRoom>();
+        if (p_incomplete_room.get_contained_shape() == null)
+        {
+            // Same nullability gap as in ShapeSearchTree45Degree; treated as an empty shape.
+            FRLogger.warn("ShapeSearchTree90Degree.restrain_shape: room has no contained shape");
+            return result;
+        }
         if (p_incomplete_room.get_contained_shape().is_empty())
         {
             if (this.board.get_test_level().ordinal() >=  TestLevel.ALL_DEBUGGING_OUTPUT.ordinal())

@@ -377,9 +377,10 @@ Begin
     // eRoundedRectangular appears in some SDKs, eRoundRectangle in others -
     // handled defensively per the research pass's flagged gap.
     Case S Of
+        { eRounded and eOctagonal never reach here - WritePadShapeRot handles both as
+          polygons before calling this, because FRPCB has neither primitive. }
         eRounded         : Result := 'circle';
         eRectangular     : Result := 'rect';
-        eOctagonal       : Result := 'octagon';
     Else
         Result := 'rect'; // rounded-rect / unknown - approximate as rect
     End;
@@ -394,6 +395,102 @@ End;
   4-point polygon instead. Without this those pads kept their unrotated
   orientation while their positions were correct, which is exactly the
   "footprints angled between horizontal and vertical are not rotated" symptom. }
+{ Emits a convex polygon for a pad that is not a plain rectangle: an Altium stadium
+  (eRounded with unequal extents) or an octagon. Points are offsets from the pad origin,
+  in mils, already rotated.
+
+  An eRounded pad is a STADIUM, not a circle - circular only when its two extents are
+  equal, otherwise a rectangle capped with semicircles on its short axis. Emitting a
+  circle of diameter XSize turned every oval pad into a grossly oversized one: U101's
+  62.99 x 16.14 mil pads became 62.99 mil circles, four times too wide on the short
+  axis, which both looked wrong and walled off the routing around them.
+
+  FRPCB has no oval or octagon primitive, and freerouting padstack shapes have to be
+  convex, so a polygon is both the available and the correct representation. }
+Procedure WriteRoundedPolygon(LayerTag : String; XSize, YSize : TCoord; Rot : Double; Octagon : Boolean);
+Const
+    CapSteps = 6;    { points per semicircular cap; 6 holds the radial error under ~1% }
+    DegToRad = 3.14159265 / 180.0;
+Var
+    HX, HY, R, Cen, A, C, Sn, Px, Py : Double;
+    I, N : Integer;
+    Xs, Ys : Array[0..63] Of Double;
+    Pts : String;
+Begin
+    HX := 1.0 * XSize / 2;
+    HY := 1.0 * YSize / 2;
+    N := 0;
+
+    If Octagon Then
+    Begin
+        { A regular-ish octagon inscribed in the pad extents: the corners are cut at
+          1 - 1/(1+sqrt(2)) of each half-extent, which is Altium's proportion. }
+        R := 0.4142136;
+        Xs[0] := -HX + R * HX; Ys[0] := -HY;
+        Xs[1] :=  HX - R * HX; Ys[1] := -HY;
+        Xs[2] :=  HX;          Ys[2] := -HY + R * HY;
+        Xs[3] :=  HX;          Ys[3] :=  HY - R * HY;
+        Xs[4] :=  HX - R * HX; Ys[4] :=  HY;
+        Xs[5] := -HX + R * HX; Ys[5] :=  HY;
+        Xs[6] := -HX;          Ys[6] :=  HY - R * HY;
+        Xs[7] := -HX;          Ys[7] := -HY + R * HY;
+        N := 8;
+    End
+    Else If HX >= HY Then
+    Begin
+        { Horizontal stadium: caps of radius HY centred at +/-(HX - HY). }
+        R := HY;
+        Cen := HX - R;
+        For I := 0 To CapSteps Do
+        Begin
+            A := -90 + (180.0 * I / CapSteps);
+            Xs[N] := Cen + R * Cos(A * DegToRad);
+            Ys[N] := R * Sin(A * DegToRad);
+            N := N + 1;
+        End;
+        For I := 0 To CapSteps Do
+        Begin
+            A := 90 + (180.0 * I / CapSteps);
+            Xs[N] := -Cen + R * Cos(A * DegToRad);
+            Ys[N] := R * Sin(A * DegToRad);
+            N := N + 1;
+        End;
+    End
+    Else
+    Begin
+        { Vertical stadium: caps of radius HX centred at +/-(HY - HX). }
+        R := HX;
+        Cen := HY - R;
+        For I := 0 To CapSteps Do
+        Begin
+            A := 0 + (180.0 * I / CapSteps);
+            Xs[N] := R * Cos(A * DegToRad);
+            Ys[N] := Cen + R * Sin(A * DegToRad);
+            N := N + 1;
+        End;
+        For I := 0 To CapSteps Do
+        Begin
+            A := 180 + (180.0 * I / CapSteps);
+            Xs[N] := R * Cos(A * DegToRad);
+            Ys[N] := -Cen + R * Sin(A * DegToRad);
+            N := N + 1;
+        End;
+    End;
+
+    C := Cos(Rot * DegToRad);
+    Sn := Sin(Rot * DegToRad);
+    Pts := '';
+    For I := 0 To N - 1 Do
+    Begin
+        Px := Xs[I] * C - Ys[I] * Sn;
+        Py := Xs[I] * Sn + Ys[I] * C;
+        If I > 0 Then Pts := Pts + ', ';
+        Pts := Pts + '[' + FloatToStr(CoordToMils(Round(Px))) + ', ' +
+            FloatToStr(CoordToMils(Round(Py))) + ']';
+    End;
+    OutLines.Add('      "' + LayerTag + '": { "type": "polygon", "points": [' + Pts + '] }');
+End;
+
 Procedure WritePadShapeRot(LayerTag : String; XSize, YSize : TCoord; Shape : TShape; Rot : Double);
 Var
     R, C, Sn, HX, HY : Double;
@@ -404,8 +501,26 @@ Var
 Begin
     If Shape = eRounded Then
     Begin
-        OutLines.Add('      "' + LayerTag + '": { "type": "circle", "diameter": ' +
-            CoordMils(XSize) + ' }');
+        If XSize = YSize Then
+        Begin
+            { Genuinely circular. }
+            OutLines.Add('      "' + LayerTag + '": { "type": "circle", "diameter": ' +
+                CoordMils(XSize) + ' }');
+        End
+        Else
+        Begin
+            { A stadium, not a circle. See WriteRoundedPolygon. }
+            WriteRoundedPolygon(LayerTag, XSize, YSize, Rot, False);
+        End;
+        Exit;
+    End;
+
+    If Shape = eOctagonal Then
+    Begin
+        { FRPCB has no octagon primitive, and ShapeName used to emit the word "octagon",
+          which the importer rejects as an unknown shape - the pad then had no copper at
+          all and its pin was dropped. }
+        WriteRoundedPolygon(LayerTag, XSize, YSize, Rot, True);
         Exit;
     End;
 

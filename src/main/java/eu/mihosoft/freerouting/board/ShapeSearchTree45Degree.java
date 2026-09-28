@@ -64,6 +64,18 @@ public class ShapeSearchTree45Degree extends ShapeSearchTree
     public Collection<IncompleteFreeSpaceExpansionRoom> complete_shape(IncompleteFreeSpaceExpansionRoom p_room,
                                                                        int p_net_no, SearchTreeObject p_ignore_object, TileShape p_ignore_shape)
     {
+        if (p_room.get_contained_shape() == null)
+        {
+            // A null contained shape means the same thing as an empty one: there is no shape
+            // this room has to contain, so it can contribute nothing. Dereferencing it threw a
+            // NullPointerException out of complete_expansion_room, which unwound the whole
+            // autoroute_item call and lost that connection for the pass - 8 times in a 120
+            // second route on a real board. Traced as far as
+            // Sorted45DegreeRoomNeighbours.calculate_enlarged_room, which copies
+            // new_room.get_contained_shape() into an existing room without checking it.
+            FRLogger.warn("ShapeSearchTree45Degree.complete_shape: room has no contained shape");
+            return new LinkedList<IncompleteFreeSpaceExpansionRoom>();
+        }
         if (!(p_room.get_contained_shape().is_IntOctagon()) && this.board.get_test_level() != TestLevel.RELEASE_VERSION)
         {
             FRLogger.warn("ShapeSearchTree45Degree.complete_shape: unexpected p_shape_to_be_contained");
@@ -246,6 +258,12 @@ public class ShapeSearchTree45Degree extends ShapeSearchTree
         // opposite of this line.
 
         Collection<IncompleteFreeSpaceExpansionRoom> result = new LinkedList<IncompleteFreeSpaceExpansionRoom>();
+        if (p_incomplete_room.get_contained_shape() == null)
+        {
+            // See the note in complete_shape: treated exactly as an empty contained shape.
+            FRLogger.warn("ShapeSearchTree45Degree.restrain_shape: room has no contained shape");
+            return result;
+        }
         if (p_incomplete_room.get_contained_shape().is_empty())
         {
             if (this.board.get_test_level().ordinal() >= TestLevel.ALL_DEBUGGING_OUTPUT.ordinal())
