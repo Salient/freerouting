@@ -315,6 +315,12 @@ public class FrpcbFile
             apply_default_trace_width(net_classes_arr, board, len);
         }
 
+        // Every net class needs a via rule, including the default class, which no entry in the
+        // file describes. Network.read_scope does the same blanket pass for DSN. Without it a
+        // class can be left with a null via rule, which the Specctra writer dereferences
+        // unguarded -- File > Export Specctra Design File died on it.
+        ensure_via_rules(board);
+
         // Clearance matrix: the pairwise class-to-class rules this format exists to carry.
         JSONArray clearance_matrix_arr = root.optJSONArray("clearance_matrix");
         if (clearance_matrix_arr != null)
@@ -805,6 +811,45 @@ public class FrpcbFile
                     net.set_class(net_class);
                 }
             }
+        }
+    }
+
+    /**
+     * Gives every net class a via rule, falling back to the board default, and creates that
+     * default when the file defined no vias at all.
+     *
+     * <p>read_net_class only sets one when the class carries a resolvable "via", and nothing
+     * describes the default net class, so classes could be left with none. A null via rule is
+     * not merely cosmetic: it also means the autorouter has no via to place for that class, so
+     * it can only route on a single layer.
+     */
+    private static void ensure_via_rules(RoutingBoard p_board)
+    {
+        if (p_board.rules.get_default_via_rule() == null)
+        {
+            p_board.rules.create_default_via_rule(p_board.rules.get_default_net_class(), "default");
+        }
+        eu.mihosoft.freerouting.rules.ViaRule default_rule = p_board.rules.get_default_via_rule();
+        if (default_rule == null)
+        {
+            FRLogger.warn("FrpcbFile: no via rule could be established; the autorouter will be"
+                    + " unable to change layers and Specctra export will be incomplete");
+            return;
+        }
+        int repaired = 0;
+        for (int i = 0; i < p_board.rules.net_classes.count(); ++i)
+        {
+            NetClass curr_class = p_board.rules.net_classes.get(i);
+            if (curr_class.get_via_rule() == null)
+            {
+                curr_class.set_via_rule(default_rule);
+                ++repaired;
+            }
+        }
+        if (repaired > 0)
+        {
+            FRLogger.info("Gave " + repaired + " net class(es) the default via rule '"
+                    + default_rule.name + "'");
         }
     }
 

@@ -234,11 +234,23 @@ public class Network extends ScopeKeyword
         Rule.write_item_clearance_class(p_par.board.rules.clearance_matrix.get_name(p_net_class.get_trace_clearance_class()),
                 p_par.file, p_par.identifier_type);
 
-        // write the via rule
-        p_par.file.new_line();
-        p_par.file.write("(via_rule ");
-        p_par.file.write(p_net_class.get_via_rule().name);
-        p_par.file.write(")");
+        // write the via rule. Guarded: a net class with no via rule is not supposed to happen,
+        // but dereferencing it here failed the whole export with a NullPointerException, which
+        // surfaced only as a bare NoClassDefFoundError dialog. Skipping the clause loses one
+        // optional line instead of the file.
+        eu.mihosoft.freerouting.rules.ViaRule via_rule = p_net_class.get_via_rule();
+        if (via_rule == null)
+        {
+            FRLogger.warn("Network.write_net_class: net class '" + p_net_class.get_name()
+                    + "' has no via rule; omitting its via_rule clause");
+        }
+        else
+        {
+            p_par.file.new_line();
+            p_par.file.write("(via_rule ");
+            p_par.file.write(via_rule.name);
+            p_par.file.write(")");
+        }
 
         // write the rules, if they are different from the default rule.
         Rule.write_scope(p_net_class, p_par);
