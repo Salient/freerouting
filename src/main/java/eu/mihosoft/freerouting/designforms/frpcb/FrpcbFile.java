@@ -377,9 +377,23 @@ public class FrpcbFile
             JSONArray wires_arr = routing_obj.optJSONArray("wires");
             if (wires_arr != null)
             {
+                int zero_length_wires = 0;
                 for (int i = 0; i < wires_arr.length(); ++i)
                 {
-                    read_wire(wires_arr.getJSONObject(i), board, layer_no_by_name, len);
+                    if (!read_wire(wires_arr.getJSONObject(i), board, layer_no_by_name, len))
+                    {
+                        ++zero_length_wires;
+                    }
+                }
+                if (zero_length_wires > 0)
+                {
+                    // One line, not one per wire. These are Altium tracks whose two endpoints
+                    // are identical - leftovers at junctions and single-click stubs. They carry
+                    // no copper and connect nothing, so dropping them is correct, and warning
+                    // about each one just buries the warnings that matter.
+                    FRLogger.info("Skipped " + zero_length_wires + " of " + wires_arr.length()
+                            + " routed wires whose start and end points are identical"
+                            + " (zero-length Altium tracks, which connect nothing)");
                 }
             }
             JSONArray routing_vias_arr = routing_obj.optJSONArray("vias");
@@ -1281,7 +1295,11 @@ public class FrpcbFile
                 clearance_class, false, FixedState.SYSTEM_FIXED);
     }
 
-    private static void read_wire(JSONObject p_wire_obj, RoutingBoard p_board, Map<String, Integer> p_layer_no_by_name, LengthConverter p_len)
+    /**
+     * Inserts one routed wire. Returns false when the wire was a zero-length Altium track and
+     * was therefore skipped, so the caller can report those once rather than individually.
+     */
+    private static boolean read_wire(JSONObject p_wire_obj, RoutingBoard p_board, Map<String, Integer> p_layer_no_by_name, LengthConverter p_len)
     {
         String net_name = p_wire_obj.optString("net", null);
         String layer_name = p_wire_obj.optString("layer", null);
@@ -1289,19 +1307,19 @@ public class FrpcbFile
         if (net_name == null || layer_name == null || path == null || path.length() < 2)
         {
             FRLogger.warn("FrpcbFile.read_wire: a routed wire is missing 'net', 'layer' or a usable 'path', skipping it");
-            return;
+            return true;
         }
         Integer layer_no = p_layer_no_by_name.get(layer_name);
         if (layer_no == null)
         {
             FRLogger.warn("FrpcbFile.read_wire: routed wire on net '" + net_name + "' references unknown layer '" + layer_name + "', skipping it");
-            return;
+            return true;
         }
         Net board_net = p_board.rules.nets.get(net_name, 1);
         if (board_net == null)
         {
             FRLogger.warn("FrpcbFile.read_wire: routed wire references unknown net '" + net_name + "', skipping it");
-            return;
+            return true;
         }
         double width = p_wire_obj.optDouble("width", 0);
         int half_width = (int) Math.round(p_len.to_board(width) / 2);
@@ -1315,12 +1333,14 @@ public class FrpcbFile
         Polygon polygon = new Polygon(corners);
         if (polygon.corner_array().length < 2)
         {
-            FRLogger.warn("FrpcbFile.read_wire: routed wire on net '" + net_name + "' has fewer than 2 distinct points, skipping it");
-            return;
+            // A zero-length track: both endpoints are the same point. Counted by the caller
+            // and reported once, not warned about individually.
+            return false;
         }
         Polyline trace_polyline = new Polyline(polygon);
         int clearance_class = board_net.get_class().default_item_clearance_classes.get(ItemClass.TRACE);
         p_board.insert_trace_without_cleaning(trace_polyline, layer_no, half_width, new int[]{board_net.net_number}, clearance_class, fixed);
+        return true;
     }
 
     private static void read_routed_via(JSONObject p_via_obj, RoutingBoard p_board, Map<String, Padstack> p_padstacks_by_name, LengthConverter p_len)
