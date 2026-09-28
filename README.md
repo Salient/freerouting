@@ -55,6 +55,33 @@ Navigate to the [Gradle](http://www.gradle.org/) project (e.g., `path/to/freerou
 
 All four .jar files will be generated in the _build\libs_ subfolder. You would typically run the _freerouting-executable.jar_ file.
 
+## How to Run It
+
+    ./freerouting
+
+That is the whole thing — it rebuilds first if the sources have moved on, then
+launches. Arguments are passed straight through, so:
+
+    # open a design
+    ./freerouting -de board.frpcb.json
+
+    # check clearances without routing anything (exit 2 if any are violated)
+    ./freerouting -de board.frpcb.json -dc Constraints.xml -rm verify -do report.txt
+
+    # finish the unrouted nets, protecting the routing that is already there
+    ./freerouting -de board.frpcb.json -dc Constraints.xml -rm finish -do out.rte -mt 300
+
+`./freerouting --help` lists every option. Two worth knowing about up front:
+
+- **`-dc Constraints.xml`** supplies the real class-to-class clearance matrix.
+  Without it, high-voltage spacing is not applied — see
+  [docs/frpcb-format.md](docs/frpcb-format.md).
+- **`-rm verify`** audits an existing layout instead of routing it. Run it before
+  `-rm finish`, which makes existing copper unfixable.
+
+The app is Swing-based and needs a display even in the batch modes; over ssh or in
+CI the script falls back to `xvfb-run` automatically.
+
 ## From the original author:
 
 Java Based Printed Circuit Board Routing Software from FreeRouting.net written by Alfons Wirtz.

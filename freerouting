@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+#
+# Launch the locally built freerouting, rebuilding first if the sources moved on.
+#
+#   ./freerouting                                   interactive GUI
+#   ./freerouting -de board.frpcb.json              open a design
+#   ./freerouting -de board.frpcb.json -rm verify -do violations.txt
+#
+# Everything not listed under "wrapper options" below is passed straight to the
+# application.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+jar="$here/build/libs/freerouting-executable.jar"
+do_build=yes
+
+usage() {
+    cat <<'USAGE'
+Usage: ./freerouting [wrapper options] [application options]
+
+Wrapper options
+  --no-build      Use the existing jar even if the sources are newer.
+  --rebuild       Force a rebuild before launching.
+  -h, --help      This message.
+
+Application options (see docs/frpcb-format.md)
+  -de FILE        Design to open: .frpcb.json, .dsn or .bin.
+  -do FILE        Output file. .rte / .ses for routing, or the report for -rm verify.
+  -dc FILE        Altium Constraints.xml holding the real clearance matrix. When
+                  omitted, a Constraints.xml next to the design file is used.
+                  Without one, class-to-class clearances are NOT applied.
+  -rm MODE        What to do with the routing the design already contains:
+                    reroute  (default) existing copper may be ripped up
+                    finish             existing copper is protected
+                    verify             check clearances only, route nothing
+                                       (exit 0 clean, 2 violations, 1 not checked)
+  -mt SECONDS     Stop autorouting after this long, then write -do.
+  -mp N           Maximum number of autorouter passes.
+  -dr FILE        Design rules file.
+
+Run ./freerouting -de board.frpcb.json -rm verify -do report.txt before -rm
+finish: finish makes existing copper unfixable, so a violation already present
+becomes one the router is not allowed to repair.
+USAGE
+}
+
+app_args=()
+for arg in "$@"; do
+    case "$arg" in
+        --no-build) do_build=no ;;
+        --rebuild)  do_build=force ;;
+        -h|--help)  usage; exit 0 ;;
+        *)          app_args+=("$arg") ;;
+    esac
+done
+
+# Rebuild when the jar is missing, or when anything it is built from is newer.
+needs_build() {
+    [[ "$do_build" == force ]] && return 0
+    [[ -f "$jar" ]] || return 0
+    [[ -n "$(find "$here/src" "$here/build.gradle" -newer "$jar" -print -quit 2>/dev/null)" ]]
+}
+
+if [[ "$do_build" != no ]] && needs_build; then
+    echo "freerouting: sources are newer than the jar, rebuilding..." >&2
+    (cd "$here" && ./gradlew --quiet executableJar)
+fi
+
+if [[ ! -f "$jar" ]]; then
+    echo "freerouting: $jar not found and could not be built." >&2
+    exit 1
+fi
+
+# freerouting is a Swing application, so it needs a display even for the batch
+# modes -- -de/-rm still construct a BoardFrame. Under WSLg DISPLAY is already
+# set; over a plain ssh session it is not, so fall back to a virtual display,
+# which is what makes -rm verify usable from a terminal or from CI.
+if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+    if command -v xvfb-run >/dev/null 2>&1; then
+        exec xvfb-run -a java -jar "$jar" "${app_args[@]+"${app_args[@]}"}"
+    fi
+    echo "freerouting: no DISPLAY set and xvfb-run is not installed; the app will" >&2
+    echo "             fail to start. Install xvfb, or set DISPLAY." >&2
+fi
+
+exec java -jar "$jar" "${app_args[@]+"${app_args[@]}"}"
