@@ -51,6 +51,8 @@ Var
     // Clearance rules this script cannot represent, reported in the export so the loss
     // is visible rather than silent.
     DroppedRules : TStringList;
+    // Every board-outline clearance rule found, with its scope and enabled flag.
+    OutlineRules : TStringList;
 
 {..............................................................................}
 { JSON string-building helpers. DelphiScript has no JSON library (confirmed - }
@@ -159,6 +161,17 @@ End;
 
   Returns 0 when the board defines no such rule, which the importer treats as "use
   the default clearance". }
+{ Whether Altium considers this rule active. A disabled rule is ignored by Altium's own
+  DRC, so exporting it as if it applied makes freerouting stricter than the board actually
+  is - the likeliest reason a 100 mil board-outline clearance was being enforced here while
+  Altium reported no violations. Defaults to True when the property is unavailable, so an
+  older SDK does not silently drop every rule. }
+Function RuleEnabled(Rule : IPCB_Rule) : Boolean;
+Begin
+    Result := True;
+    Try Result := Rule.Enabled; Except End;
+End;
+
 Function BoardOutlineClearance(Board : IPCB_Board) : TCoord;
 Const
     RULEKIND_BOARD_OUTLINE_CLEARANCE = 63;
@@ -167,6 +180,7 @@ Var
     Rule : IPCB_ClearanceConstraint;
     Kind : Integer;
     G    : TCoord;
+    Nm, S1 : String;
 Begin
     Result := 0;
     Iter := Board.BoardIterator_Create;
@@ -183,7 +197,16 @@ Begin
             Begin
                 G := 0;
                 Try G := Rule.Gap; Except End;
-                If G > Result Then Result := G;
+                Nm := ''; S1 := '';
+                Try Nm := Rule.Name; Except End;
+                Try S1 := Rule.Scope1Expression; Except End;
+                // Recorded for every outline rule, enabled or not. FRPCB carries ONE
+                // board-edge clearance, so a rule scoped to a subset of nets (an HV class,
+                // say) still gets applied to all copper - which over-constrains everything
+                // else. This diagnostic is what makes that visible instead of inferred.
+                OutlineRules.Add('    { "rule": ' + JStr(Nm) + ', "scope": ' + JStr(S1) +
+                    ', "clearance": ' + CoordMils(G) + ', "enabled": ' + BoolStr(RuleEnabled(Rule)) + ' }');
+                If RuleEnabled(Rule) And (G > Result) Then Result := G;
             End;
             Rule := Iter.NextPCBObject;
         End;
@@ -1169,7 +1192,7 @@ Begin
         Begin
             Kind := eRule_Clearance;
             Try Kind := RuleWidth.RuleKind; Except End;
-            If Kind = eRule_MaxMinWidth Then
+            If (Kind = eRule_MaxMinWidth) And RuleEnabled(RuleWidth) Then
             Begin
                 Try
                     If ExtractNetClassName(RuleWidth.Scope1Expression) = ClassName Then
@@ -1475,7 +1498,7 @@ Begin
         Begin
             Kind := eRule_MaxMinWidth;
             Try Kind := Rule.RuleKind; Except End;
-            If Kind = eRule_Clearance Then
+            If (Kind = eRule_Clearance) And RuleEnabled(Rule) Then
             Begin
                 Nm := ''; S1 := ''; S2 := ''; G := 0;
                 Try Nm := Rule.Name; Except End;
@@ -1554,7 +1577,7 @@ Begin
         Begin
             Kind := eRule_MaxMinWidth;
             Try Kind := Rule.RuleKind; Except End;
-            If Kind = eRule_Clearance Then
+            If (Kind = eRule_Clearance) And RuleEnabled(Rule) Then
             Begin
                 S1 := ''; S2 := ''; G := 0;
                 Try S1 := Rule.Scope1Expression; Except End;
@@ -1603,6 +1626,15 @@ Begin
 
     // Make the losses visible in the exported file. The importer ignores unknown
     // top-level keys, so this costs nothing on the freerouting side.
+    OutLines.Add('  "_board_outline_rules": [');
+    For N := 0 To OutlineRules.Count - 1 Do
+    Begin
+        If N < OutlineRules.Count - 1 Then
+            OutLines.Add(OutlineRules.Strings[N] + ',')
+        Else
+            OutLines.Add(OutlineRules.Strings[N]);
+    End;
+    OutLines.Add('  ],');
     OutLines.Add('  "_dropped_clearance_rules": [');
     For N := 0 To DroppedRules.Count - 1 Do
     Begin
@@ -1854,6 +1886,7 @@ Begin
     OutLines := TStringList.Create;
     NetRuleNets := TStringList.Create;
     DroppedRules := TStringList.Create;
+    OutlineRules := TStringList.Create;
     Try
         // Must run before WriteNetClasses: it decides which single-net classes that
         // procedure has to emit, and which rules WriteClearanceMatrix can express.
@@ -1881,6 +1914,7 @@ Begin
             'Class-to-class clearances are NOT in this file - import it with' + #13#10 +
             '-dc Constraints.xml, or leave Constraints.xml next to it.');
     Finally
+        OutlineRules.Free;
         DroppedRules.Free;
         NetRuleNets.Free;
         OutLines.Free;
