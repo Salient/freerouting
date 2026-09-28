@@ -241,7 +241,10 @@ public class BasicBoard implements java.io.Serializable
         }
         catch (Exception e)
         {
-            FRLogger.error("Couldn't insert new trace, because its normalization failed.", e);
+            // Recoverable: the trace is inserted, just not tidied up against its neighbours.
+            // See PolylineTrace.normalize for why this happens on imported boards. Logged
+            // without a stack trace, and at WARN, because the operation continues.
+            FRLogger.warn("Inserted a trace without normalizing it: " + e.getMessage());
         }
     }
 

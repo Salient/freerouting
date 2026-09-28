@@ -801,7 +801,14 @@ public class PolylineTrace extends Trace implements java.io.Serializable
 
     private boolean normalize(IntOctagon p_clip_shape, int normalization_depth) throws Exception {
         if (normalization_depth > MAX_NORMALIZATION_DEPTH) {
-            throw new Exception("We reached the maximum normalization depth ("+MAX_NORMALIZATION_DEPTH+").");
+            // Each level of recursion happens only after combine() actually merged something,
+            // so a long chain is legitimate on a net imported as many short collinear
+            // segments; it is not necessarily a runaway. The cap stays because commit
+            // 7f3f0c5d added it for a real StackOverflow (see tests/Issue15-StackOverflow.dsn),
+            // and hanging or overflowing would both be worse than abandoning one trace tidy-up.
+            throw new Exception("reached the maximum normalization depth of " + MAX_NORMALIZATION_DEPTH
+                    + " while combining trace #" + this.get_id_no() + " on layer " + this.get_layer()
+                    + " (" + this.corner_count() + " corners)");
         }
 
         boolean observers_activated = false;
@@ -1059,7 +1066,10 @@ public class PolylineTrace extends Trace implements java.io.Serializable
         }
         catch (Exception e)
         {
-            FRLogger.error("Couldn't change the trace, because its normalization failed.", e);
+            // Recoverable: the trace stays as it is, unnormalized. Logged without a stack
+            // trace because a 30-frame dump of the recursion says nothing the message does not,
+            // and at ERROR it reads as a failure when the operation simply carried on.
+            FRLogger.warn("Left a trace unnormalized after changing it: " + e.getMessage());
         }
     }
 
