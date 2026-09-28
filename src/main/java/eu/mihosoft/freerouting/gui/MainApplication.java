@@ -457,6 +457,50 @@ public class MainApplication extends javax.swing.JFrame
     }
 
     /**
+     * Logs how many connections are still incomplete, and which nets account for most of
+     * them. These are the diagonal "air lines" drawn over the board, and the count is the
+     * single most useful number for telling a genuinely unrouted board from one whose
+     * existing copper failed to import as connected.
+     */
+    private static void report_incomplete_connections(BoardFrame p_frame)
+    {
+        try
+        {
+            eu.mihosoft.freerouting.interactive.BoardHandling handling = p_frame.board_panel.board_handling;
+            eu.mihosoft.freerouting.interactive.RatsNest ratsnest = handling.get_ratsnest();
+            eu.mihosoft.freerouting.board.BasicBoard board = handling.get_routing_board();
+            int total = ratsnest.incomplete_count();
+            FRLogger.info("Incomplete connections (ratsnest air lines): " + total);
+            if (total == 0 || board == null)
+            {
+                return;
+            }
+            java.util.List<String> worst = new java.util.ArrayList<>();
+            for (int net_no = 1; net_no <= board.rules.nets.max_net_no(); ++net_no)
+            {
+                int count = ratsnest.incomplete_count(net_no);
+                if (count > 0)
+                {
+                    eu.mihosoft.freerouting.rules.Net net = board.rules.nets.get(net_no);
+                    worst.add(count + "\t" + (net == null ? ("net " + net_no) : net.name));
+                }
+            }
+            worst.sort(java.util.Collections.reverseOrder(
+                    java.util.Comparator.comparingInt(s -> Integer.parseInt(s.split("\t")[0]))));
+            FRLogger.info("Nets with incomplete connections: " + worst.size()
+                    + "; worst " + Math.min(10, worst.size()) + ":");
+            for (int i = 0; i < Math.min(10, worst.size()); ++i)
+            {
+                FRLogger.info("  " + worst.get(i).replace('\t', ' ') + " incomplete");
+            }
+        }
+        catch (Exception e)
+        {
+            FRLogger.warn("Could not count incomplete connections: " + e);
+        }
+    }
+
+    /**
      * Writes the clearance report for -rm verify. Returns the violation count, or a negative
      * number when the check could not be run at all.
      */
@@ -481,6 +525,7 @@ public class MainApplication extends javax.swing.JFrame
             {
                 writer = new java.io.PrintWriter(new java.io.OutputStreamWriter(System.out));
             }
+            report_incomplete_connections(p_frame);
             return eu.mihosoft.freerouting.interactive.ClearanceReport.write(board, writer);
         }
         catch (Exception e)
