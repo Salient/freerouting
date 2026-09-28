@@ -1067,6 +1067,13 @@ public class BoardHandling extends BoardHandlingImpl
      */
     public static boolean altium_constraints_required = false;
 
+    /**
+     * Whether to offer a file chooser when no Constraints.xml can be found for an FRPCB
+     * design. True for an interactive session, where the logged warning would otherwise go
+     * unseen; cleared for a batch run (-de), where a modal dialog would hang the process.
+     */
+    public static boolean prompt_for_altium_constraints = true;
+
     public DsnFile.ReadResult import_design(java.io.InputStream p_design, String p_design_file_name,
                                             eu.mihosoft.freerouting.board.BoardObservers p_observers,
                                             eu.mihosoft.freerouting.datastructures.IdNoGenerator p_item_id_no_generator, TestLevel p_test_level)

@@ -198,7 +198,10 @@ public class BoardFrame extends javax.swing.JFrame
                         + "'; the design file's own clearance_matrix will be used, which on an"
                         + " Altium Constraint Manager project understates class-to-class clearance."
                         + " Pass -dc <Constraints.xml> to supply it.");
-                return null;
+                // That warning only reaches logs/freerouter.log and stdout, and there is no
+                // log window in this UI, so an interactive user would never see it. Ask,
+                // rather than silently routing a high-voltage board on default clearances.
+                return ask_for_constraints_file(design_name);
             }
             result = sibling;
             FRLogger.info("Using the Constraints.xml found next to the design file: " + result);
@@ -212,6 +215,51 @@ public class BoardFrame extends javax.swing.JFrame
                     + " constraints in Altium if the rules have changed.");
         }
         return result;
+    }
+
+    /**
+     * Offers a file chooser for a Constraints.xml that could not be found automatically.
+     * Returns the chosen file, or null to go ahead without one.
+     *
+     * <p>Skipped entirely in batch mode (-de), where a modal dialog would hang a scripted
+     * or CI run; there the logged warning is the whole story, which is why -dc exists.
+     */
+    private java.io.File ask_for_constraints_file(String p_design_name)
+    {
+        if (!eu.mihosoft.freerouting.interactive.BoardHandling.prompt_for_altium_constraints)
+        {
+            return null;
+        }
+        String message = "No Constraints.xml was found next to\n" + p_design_name + "\n\n"
+                + "Altium keeps the class-to-class clearance matrix there, not in the design\n"
+                + "file. Without it, clearances between net classes fall back to defaults,\n"
+                + "which on a high-voltage board can be many times too small.\n\n"
+                + "Locate Constraints.xml now?";
+        int answer = javax.swing.JOptionPane.showConfirmDialog(this, message,
+                "Clearance rules not found", javax.swing.JOptionPane.YES_NO_OPTION,
+                javax.swing.JOptionPane.WARNING_MESSAGE);
+        if (answer != javax.swing.JOptionPane.YES_OPTION)
+        {
+            FRLogger.warn("Continuing without a Constraints.xml: class-to-class clearances"
+                    + " are NOT applied to this board.");
+            return null;
+        }
+        javax.swing.JFileChooser file_chooser =
+                new javax.swing.JFileChooser(this.design_file.get_parent_file());
+        file_chooser.setDialogTitle("Select Altium Constraints.xml");
+        file_chooser.setFileFilter(new eu.mihosoft.freerouting.datastructures.FileFilter(new String[]{"xml"}));
+        if (file_chooser.showOpenDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION)
+        {
+            FRLogger.warn("Continuing without a Constraints.xml: class-to-class clearances"
+                    + " are NOT applied to this board.");
+            return null;
+        }
+        java.io.File chosen = file_chooser.getSelectedFile();
+        if (chosen != null)
+        {
+            FRLogger.info("Using the Constraints.xml chosen by the user: " + chosen);
+        }
+        return chosen;
     }
 
     /**

@@ -423,6 +423,9 @@ public class MainApplication extends javax.swing.JFrame
      */
     private static void apply_rule_and_mode_options(StartupOptions p_options)
     {
+        // This is the batch path (-de): never block on a dialog, since a scripted or CI run
+        // has nobody to answer it.
+        eu.mihosoft.freerouting.interactive.BoardHandling.prompt_for_altium_constraints = false;
         if (p_options.altium_constraints_filename != null)
         {
             eu.mihosoft.freerouting.interactive.BoardHandling.altium_constraints_file =
