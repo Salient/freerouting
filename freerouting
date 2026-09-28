@@ -71,16 +71,33 @@ if [[ ! -f "$jar" ]]; then
     exit 1
 fi
 
+# Run from a private snapshot of the jar, never from build/libs directly.
+#
+# A JVM loads classes out of its jar lazily, for as long as it runs. Rebuilding while an
+# instance is open therefore breaks that instance: every class it has not needed yet fails
+# to load, as NoClassDefFoundError naming whatever it reached for next - and the reported
+# class is arbitrary, so it looks like a code bug rather than a swapped file. Even the
+# uncaught-exception handler falls over, because it cannot load log4j's ThrowableProxy to
+# format the report.
+run_jar="$(mktemp -t "freerouting-run-XXXXXX.jar")"
+cleanup() { rm -f "$run_jar"; }
+trap cleanup EXIT INT TERM
+cp "$jar" "$run_jar"
+
 # freerouting is a Swing application, so it needs a display even for the batch
 # modes -- -de/-rm still construct a BoardFrame. Under WSLg DISPLAY is already
 # set; over a plain ssh session it is not, so fall back to a virtual display,
 # which is what makes -rm verify usable from a terminal or from CI.
 if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
     if command -v xvfb-run >/dev/null 2>&1; then
-        exec xvfb-run -a java -jar "$jar" "${app_args[@]+"${app_args[@]}"}"
+        # Not exec: that would replace this shell and the EXIT trap would never remove the
+        # snapshot.
+        xvfb-run -a java -jar "$run_jar" "${app_args[@]+"${app_args[@]}"}"
+        exit $?
     fi
     echo "freerouting: no DISPLAY set and xvfb-run is not installed; the app will" >&2
     echo "             fail to start. Install xvfb, or set DISPLAY." >&2
 fi
 
-exec java -jar "$jar" "${app_args[@]+"${app_args[@]}"}"
+java -jar "$run_jar" "${app_args[@]+"${app_args[@]}"}"
+exit $?
