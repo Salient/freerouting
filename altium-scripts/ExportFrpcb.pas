@@ -23,13 +23,34 @@
 { are all emitted as the generic, most restrictive "keepout" type, because    }
 { nothing in the confirmed API distinguishes a copper keepout from a via-only }
 { or placement-only one (see WriteKeepouts). Everything else - layers,        }
-{ outline, padstacks, components, nets, net classes with resolved width and   }
-{ clearance, the pairwise clearance matrix, via rules, copper pours and       }
-{ existing routed copper - is exported.                                      }
+{ outline, padstacks, components, nets, net classes with resolved width,      }
+{ via rules, copper pours and existing routed copper - is exported.          }
+{                                                                              }
+{ THE CLASS-TO-CLASS CLEARANCE MATRIX IS NOT EXPORTED HERE, AND MUST NOT BE.  }
+{ On a project using Altium's Constraint Manager, the PCB_Rule objects this   }
+{ script can reach hold only a stale default matrix. Measured on the          }
+{ reference board every high-voltage value read this way was understated by   }
+{ 2.5x to 25x - 8 mil where the design requires 200 between unclassified      }
+{ copper and a 1300 V net. The real matrix lives in Constraints.xml beside    }
+{ the .PcbDoc and is read on the freerouting side by                          }
+{ designforms/frpcb/AltiumConstraintsFile.java; pass it with -dc, or leave it }
+{ next to the design file and the importer finds it.                          }
+{                                                                              }
+{ What this script still contributes to clearance_matrix is the part that is  }
+{ NOT in Constraints.xml: rules scoped to an individual NET rather than to a   }
+{ class (on the reference board, CHASSIS to the HV classes at 150 mil).       }
+{ Neither store alone is complete.                                            }
 {..............................................................................}
 
 Var
     OutLines     : TStringList;
+    // Nets named by a net-scoped clearance rule (e.g. CHASSIS). Each is emitted as a
+    // single-net net class so its clearances can be carried as real class pairs in
+    // clearance_matrix, instead of being flattened into one blanket per-net clearance.
+    NetRuleNets  : TStringList;
+    // Clearance rules this script cannot represent, reported in the export so the loss
+    // is visible rather than silent.
+    DroppedRules : TStringList;
 
 {..............................................................................}
 { JSON string-building helpers. DelphiScript has no JSON library (confirmed - }
@@ -844,53 +865,6 @@ Begin
     Result := Copy(ScopeExpr, P1, P2 - 1);
 End;
 
-{ The largest clearance any non-matrix clearance rule imposes on this NET, or 0.
-
-  A rule scoped to a single net rather than a class cannot be a clearance_matrix
-  entry (FRPCB's matrix is class-vs-class), but it is still a real constraint: on
-  this board CHASSIS - a net, not a class - must keep 150 mil from the HV classes.
-  Emitting it as the net's own clearance override is the representable form, and
-  the maximum is taken because that is the safe reading when several rules apply. }
-Function NetClearanceOverride(Board : IPCB_Board; NetName : WideString) : TCoord;
-Var
-    Iter : IPCB_BoardIterator;
-    Rule : IPCB_ClearanceConstraint;
-    Kind : TRuleKind;
-    S1, S2 : String;
-    G    : TCoord;
-Begin
-    Result := 0;
-    Iter := Board.BoardIterator_Create;
-    Try
-        Iter.AddFilter_ObjectSet(MkSet(eRuleObject));
-        Iter.AddFilter_LayerSet(AllLayers);
-        Iter.AddFilter_Method(eProcessAll);
-        Rule := Iter.FirstPCBObject;
-        While Rule <> Nil Do
-        Begin
-            Kind := eRule_MaxMinWidth;
-            Try Kind := Rule.RuleKind; Except End;
-            If Kind = eRule_Clearance Then
-            Begin
-                S1 := ''; S2 := ''; G := 0;
-                Try S1 := Rule.Scope1Expression; Except End;
-                Try S2 := Rule.Scope2Expression; Except End;
-                Try G := Rule.Gap; Except End;
-                // Only a rule naming THIS net on one side and at least one net class
-                // on the other; a plain All/All or IsVia/IsPad rule is the board
-                // default and must not become a per-net override.
-                If (G > Result) And
-                   (((ExtractNetName(S1) = NetName) And (NthNetClassName(S2, 0) <> '')) Or
-                    ((ExtractNetName(S2) = NetName) And (NthNetClassName(S1, 0) <> ''))) Then
-                    Result := G;
-            End;
-            Rule := Iter.NextPCBObject;
-        End;
-    Finally
-        Board.BoardIterator_Destroy(Iter);
-    End;
-End;
-
 Procedure WriteNets(Board : IPCB_Board);
 Var
     NetIter  : IPCB_BoardIterator;
@@ -898,7 +872,6 @@ Var
     PinIter  : IPCB_GroupIterator;
     Pad      : IPCB_Pad;
     FirstN, FirstP : Boolean;
-    NetClr   : TCoord;
 Begin
     OutLines.Add('  "nets": [');
     FirstN := True;
@@ -934,10 +907,12 @@ Begin
             Finally
                 Net.GroupIterator_Destroy(PinIter);
             End;
+            // No per-net "rule" clearance is emitted. A net-scoped clearance rule used to
+            // be flattened to here, which made the net keep its widest clearance from
+            // EVERYTHING - on the reference board CHASSIS ended up 150 mil from its own
+            // ground pours. Those rules are now emitted as real class pairs instead; see
+            // CollectNetScopedRuleNets and WriteClearanceMatrix.
             OutLines.Add('      ]');
-            NetClr := NetClearanceOverride(Board, Net.Name);
-            If NetClr > 0 Then
-                OutLines.Add('      ,"rule": { "clearance": ' + CoordMils(NetClr) + ' }');
 
             Net := NetIter.NextPCBObject;
         End;
@@ -1201,6 +1176,7 @@ Var
     ObjClass  : IPCB_ObjectClass;
     Net       : IPCB_Net;
     FirstC, FirstN : Boolean;
+    I         : Integer;
 Begin
     OutLines.Add('  "net_classes": [');
     FirstC := True;
@@ -1255,6 +1231,27 @@ Begin
             End;
             ObjClass := ClassIter.NextPCBObject;
         End;
+
+        // One single-net class per net that a net-scoped clearance rule names, so those
+        // rules can be carried as genuine class pairs in clearance_matrix rather than as a
+        // blanket per-net clearance. See CollectNetScopedRuleNets. These are the SMALLEST
+        // classes in the file, which matters: the importer assigns each net its smallest
+        // containing class, so a one-net class wins over "All Nets".
+        For I := 0 To NetRuleNets.Count - 1 Do
+        Begin
+            If Not FirstC Then OutLines.Add('    },');
+            FirstC := False;
+            OutLines.Add('    { "name": ' + JStr(NetRuleNets.Strings[I]) + ',');
+            OutLines.Add('      "nets": [ ' + JStr(NetRuleNets.Strings[I]) + ' ],');
+            // Width and self-clearance fall back to the board defaults inside
+            // ClassWidth/ClassClearance when no rule is scoped to this name, which is the
+            // normal case for a net.
+            OutLines.Add('      "width": ' + CoordMils(ClassWidth(Board, NetRuleNets.Strings[I])) + ',');
+            OutLines.Add('      "clearance": ' + CoordMils(ClassClearance(Board, NetRuleNets.Strings[I])) + ',');
+            OutLines.Add('      "min_length": 0, "max_length": 0,');
+            OutLines.Add('      "via": ' + JStr(DefaultViaRuleName(Board)));
+        End;
+
         If Not FirstC Then OutLines.Add('    }');
     Finally
         Board.BoardIterator_Destroy(ClassIter);
@@ -1319,104 +1316,40 @@ Begin
     Result := Found;
 End;
 
-{ Dumps every cell of every matrix-mode clearance rule, from BOTH infrastructures
-  (ClearanceRules and SameClearanceRules), including the item type each name was
-  reported with. Diagnostic only. }
-Procedure WriteMatrixCellDump(Board : IPCB_Board);
+{ Populates NetRuleNets with every net a net-scoped clearance rule names, and
+  DroppedRules with the rules this script cannot represent at all.
+
+  A rule like
+    InNet('CHASSIS') vs InNetClass('1300V') or InNetClass('900V') or InNetClass('500V')
+  is a real pairwise constraint that Constraints.xml does NOT carry: every clearance value
+  there is a class-vs-class matrix cell, and a net appears in that matrix only against the
+  default scope. So it has to come from here - but as real class pairs, which means the net
+  needs a net class of its own containing just itself. WriteNetClasses emits those,
+  WriteClearanceMatrix emits the pairs.
+
+  A rule naming no class on either side (e.g. IsVia vs IsPad, an object-type scope
+  freerouting's class model has no equivalent for) is recorded in DroppedRules rather than
+  silently discarded. }
+{ True when a scope expression negates something. ExtractNetName/NthNetClassName match
+  InNet(...)/InNetClass(...) textually and cannot see a surrounding "not", so a scope like
+  "IsPad and not InNet('CHASSIS')" would otherwise be read as scoping TO net CHASSIS -
+  exactly inverted. Such a scope is treated as unrepresentable instead of guessed at. }
+Function HasNegation(ScopeExpr : String) : Boolean;
 Var
-    Iter  : IPCB_BoardIterator;
-    Rule  : IPCB_ClearanceConstraint;
-    Kind  : TRuleKind;
-    IsM   : Boolean;
-    First : Boolean;
-    Pass  : Integer;
-    Infra : IPCB_ClearanceMatrixInfrastructure;
-    E1, E2 : IPCB_MatrixItemEnumerator;
-    Cell  : IPCB_ClearanceConstraint;
-    G     : TCoord;
-    Src   : String;
+    Lower : String;
 Begin
-    OutLines.Add('  "_matrix_cells_debug": [');
-    First := True;
-    Iter := Board.BoardIterator_Create;
-    Try
-        Iter.AddFilter_ObjectSet(MkSet(eRuleObject));
-        Iter.AddFilter_LayerSet(AllLayers);
-        Iter.AddFilter_Method(eProcessAll);
-        Rule := Iter.FirstPCBObject;
-        While Rule <> Nil Do
-        Begin
-            Kind := eRule_MaxMinWidth;
-            Try Kind := Rule.RuleKind; Except End;
-            If Kind = eRule_Clearance Then
-            Begin
-                For Pass := 0 To 1 Do
-                Begin
-                    Infra := Nil;
-                    If Pass = 0 Then
-                    Begin
-                        Src := 'ClearanceRules';
-                        Try Infra := Rule.ClearanceRules; Except End;
-                    End
-                    Else
-                    Begin
-                        Src := 'SameClearanceRules';
-                        Try Infra := Rule.SameClearanceRules; Except End;
-                    End;
-                    If Infra <> Nil Then
-                    Begin
-                        Try
-                            E1 := Infra.GetMatrixItemsEnumerator;
-                            While E1.Next Do
-                            Begin
-                                E2 := Infra.GetMatrixItemsEnumerator;
-                                While E2.Next Do
-                                Begin
-                                    G := -1;
-                                    Try
-                                        Cell := Infra.GetCellRule(E1.ItemName, E1.ItemType, E2.ItemName, E2.ItemType);
-                                        If Cell <> Nil Then G := Cell.Gap;
-                                    Except End;
-                                    If Not First Then OutLines.Add('    },');
-                                    First := False;
-                                    OutLines.Add('    { "src": ' + JStr(Src) +
-                                        ', "a": ' + JStr(E1.ItemName) + ', "at": ' + IntToStr(Ord(E1.ItemType)) +
-                                        ', "b": ' + JStr(E2.ItemName) + ', "bt": ' + IntToStr(Ord(E2.ItemType)) +
-                                        ', "gap": ' + CoordMils(G) + ' ');
-                                End;
-                            End;
-                        Except End;
-                    End;
-                End;
-            End;
-            Rule := Iter.NextPCBObject;
-        End;
-        If Not First Then OutLines.Add('    }');
-    Finally
-        Board.BoardIterator_Destroy(Iter);
-    End;
-    OutLines.Add('  ],');
+    Lower := LowerCase(ScopeExpr);
+    Result := (Pos('not ', Lower) > 0) Or (Pos('!', Lower) > 0);
 End;
 
-{ Writes a "_clearance_rules_debug" array: one entry per eRule_Clearance rule with
-  its name, both scope expressions, its Gap and whether it is a matrix rule. Used to
-  find where Altium keeps the large class-pair clearances. }
-Procedure WriteClearanceRuleDump(Board : IPCB_Board);
+Procedure CollectNetScopedRuleNets(Board : IPCB_Board);
 Var
-    Iter  : IPCB_BoardIterator;
-    Rule  : IPCB_ClearanceConstraint;
-    First : Boolean;
-    Kind  : TRuleKind;
-    S1, S2, Nm : String;
-    G     : TCoord;
-    IsM   : Boolean;
+    Iter    : IPCB_BoardIterator;
+    Rule    : IPCB_ClearanceConstraint;
+    Kind    : TRuleKind;
+    S1, S2, Nm, NetName : String;
+    G       : TCoord;
 Begin
-    // Also dump every matrix CELL from both infrastructures a matrix rule exposes
-    // (ClearanceRules and SameClearanceRules), so we can see which one actually
-    // holds the large per-class-pair values from Altium's Rules grid.
-    WriteMatrixCellDump(Board);
-    OutLines.Add('  "_clearance_rules_debug": [');
-    First := True;
     Iter := Board.BoardIterator_Create;
     Try
         Iter.AddFilter_ObjectSet(MkSet(eRuleObject));
@@ -1429,51 +1362,69 @@ Begin
             Try Kind := Rule.RuleKind; Except End;
             If Kind = eRule_Clearance Then
             Begin
-                Nm := ''; S1 := ''; S2 := ''; G := -1; IsM := False;
+                Nm := ''; S1 := ''; S2 := ''; G := 0;
                 Try Nm := Rule.Name; Except End;
                 Try S1 := Rule.Scope1Expression; Except End;
                 Try S2 := Rule.Scope2Expression; Except End;
                 Try G := Rule.Gap; Except End;
-                // GetState_IsMatrix is undeclared in this engine (faults uncatchably);
-                // report whether the rule exposes enumerable matrix items instead.
-                Try IsM := Rule.ClearanceRules.GetMatrixItemsEnumerator.Next; Except End;
-                If Not First Then OutLines.Add('    },');
-                First := False;
-                OutLines.Add('    { "name": ' + JStr(Nm) + ', "scope1": ' + JStr(S1) +
-                    ', "scope2": ' + JStr(S2) + ', "gap": ' + CoordMils(G) +
-                    ', "is_matrix": ' + BoolStr(IsM) + ' ');
+
+                NetName := '';
+                If Not (HasNegation(S1) Or HasNegation(S2)) Then
+                Begin
+                    If (ExtractNetName(S1) <> '') And (NthNetClassName(S2, 0) <> '') Then
+                        NetName := ExtractNetName(S1)
+                    Else If (ExtractNetName(S2) <> '') And (NthNetClassName(S1, 0) <> '') Then
+                        NetName := ExtractNetName(S2);
+                End;
+
+                If (NetName <> '') And (G > 0) Then
+                Begin
+                    // A net that happens to share a class's name needs no synthetic class.
+                    If (Not IsNetClassName(Board, NetName)) And (NetRuleNets.IndexOf(NetName) < 0) Then
+                        NetRuleNets.Add(NetName);
+                End
+                Else If (G > 0) And (S1 <> 'All') And (S2 <> 'All') Then
+                Begin
+                    // Neither the board default (All/All, which Constraints.xml carries as
+                    // its default scope) nor anything this format can express.
+                    DroppedRules.Add('    { "rule": ' + JStr(Nm) + ', "scope1": ' + JStr(S1) +
+                        ', "scope2": ' + JStr(S2) + ', "clearance": ' + CoordMils(G) +
+                        ', "reason": "no net class on either side; freerouting has no object-type clearance scope" }');
+                End;
             End;
             Rule := Iter.NextPCBObject;
         End;
-        If Not First Then OutLines.Add('    }');
     Finally
         Board.BoardIterator_Destroy(Iter);
     End;
-    OutLines.Add('  ],');
 End;
+
+{..............................................................................}
+{ clearance_matrix - net-scoped pairwise rules ONLY.                          }
+{                                                                              }
+{ Class-to-class cells are deliberately not emitted here; see the file header  }
+{ for why reading them from PCB_Rule gave answers 2.5x to 25x too small. This  }
+{ writes only the part Constraints.xml lacks: for each rule scoped to one NET  }
+{ against a list of classes, one entry per (net, class) pair, at the rule's    }
+{ gap. The net side resolves against the single-net class WriteNetClasses      }
+{ emitted for it.                                                             }
+{                                                                              }
+{ The compound-OR scope parse matters: on the reference board the only large   }
+{ clearance (CHASSIS to the HV classes, 150 mil) is a single rule whose second }
+{ scope is a four-way OR list, so a single-name parse would drop three of the  }
+{ four pairs.                                                                 }
+{..............................................................................}
 
 Procedure WriteClearanceMatrix(Board : IPCB_Board);
 Var
-    Iter          : IPCB_BoardIterator;
-    RuleClear     : IPCB_ClearanceConstraint;
-    ClassA, ClassB : String;
-    First         : Boolean;
-    Scope1, Scope2 : String;
-    GapVal        : TCoord;
-    RuleKindOk    : Boolean;
-    IsMatrixRule  : Boolean;
-    NA, NB        : Integer;
-    MatrixInfra   : IPCB_ClearanceMatrixInfrastructure;
-    ItemEnum1, ItemEnum2 : IPCB_MatrixItemEnumerator;
-    Name1, Name2  : WideString;
-    CellRule      : IPCB_ClearanceConstraint;
-    CellGap       : TCoord;
+    Iter      : IPCB_BoardIterator;
+    Rule      : IPCB_ClearanceConstraint;
+    Kind      : TRuleKind;
+    S1, S2, NetName, ClassSide, ClassName : String;
+    G         : TCoord;
+    First     : Boolean;
+    N         : Integer;
 Begin
-    // DIAGNOSTIC: dump every clearance rule verbatim (kind, both scope strings,
-    // Gap, matrix flag) so a mismatch between Altium's Rules dialog and what lands
-    // in clearance_matrix can be diagnosed from the exported file instead of
-    // guessing. Harmless to the importer, which ignores unknown top-level keys.
-    WriteClearanceRuleDump(Board);
     OutLines.Add('  "clearance_matrix": [');
     First := True;
     Iter := Board.BoardIterator_Create;
@@ -1483,112 +1434,67 @@ Begin
         Iter.AddFilter_Method(eProcessAll);
         // Direct assignment from FirstPCBObject into the typed IPCB_ClearanceConstraint
         // variable - required for DelphiScript to actually narrow the interface.
-        RuleClear := Iter.FirstPCBObject;
-        While RuleClear <> Nil Do
+        Rule := Iter.FirstPCBObject;
+        While Rule <> Nil Do
         Begin
-            RuleKindOk := False;
-            Try RuleKindOk := (RuleClear.RuleKind = eRule_Clearance); Except End;
-            If RuleKindOk Then
+            Kind := eRule_MaxMinWidth;
+            Try Kind := Rule.RuleKind; Except End;
+            If Kind = eRule_Clearance Then
             Begin
-                // See the note in ClassClearance: GetState_IsMatrix is undeclared in
-                // this engine and faults uncatchably. Treat "has enumerable matrix
-                // items" as the matrix test instead.
-                IsMatrixRule := False;
-                MatrixInfra := Nil;
-                Try MatrixInfra := RuleClear.ClearanceRules; Except End;
-                If MatrixInfra <> Nil Then
-                    Try IsMatrixRule := MatrixInfra.GetMatrixItemsEnumerator.Next; Except End;
-                If IsMatrixRule Then
-                Begin
-                    Try
-                        ItemEnum1 := MatrixInfra.GetMatrixItemsEnumerator;
-                        While ItemEnum1.Next Do
-                        Begin
-                            Name1 := ItemEnum1.ItemName;
-                            If IsNetClassName(Board, Name1) Then
-                            Begin
-                                ItemEnum2 := MatrixInfra.GetMatrixItemsEnumerator;
-                                While ItemEnum2.Next Do
-                                Begin
-                                    Name2 := ItemEnum2.ItemName;
-                                    If (Name1 < Name2) And IsNetClassName(Board, Name2) Then // emit each unordered class pair once
-                                    Begin
-                                        CellGap := -1;
-                                        Try
-                                            CellRule := MatrixInfra.GetCellRule(Name1, ItemEnum1.ItemType, Name2, ItemEnum2.ItemType);
-                                            If CellRule <> Nil Then CellGap := CellRule.Gap;
-                                        Except End;
-                                        If CellGap >= 0 Then
-                                        Begin
-                                            If Not First Then OutLines.Add('    },');
-                                            First := False;
-                                            OutLines.Add('    { "classes": [' + JStr(Name1) + ', ' + JStr(Name2) +
-                                                '], "clearance": ' + CoordMils(CellGap) + ' ');
-                                        End;
-                                    End;
-                                End;
-                            End;
-                        End;
-                    Except
-                        // PROBE path failed outright (wrong property/method name on this
-                        // Altium build) - fall through; this rule simply contributes
-                        // nothing to clearance_matrix rather than crashing the export.
-                    End;
-                End
-                Else
-                Begin
-                    // Non-matrix clearance rule. Both scopes are parsed as OR-lists of
-                    // InNetClass(...) and expanded into every implied class pair, because
-                    // real boards put genuine constraints in compound scopes - on this
-                    // board the only large clearance (150 mil) lives in
-                    //   InNet('CHASSIS') vs InNetClass('1300V') or ... or InNetClass('HV CLOSE')
-                    // which a single-name parse dropped entirely. A side scoped to a bare
-                    // InNet(...) contributes its NET name, which FRPCB cannot express as a
-                    // class pair; such a rule is expanded against the other side's classes
-                    // only if that net is itself a class name, and otherwise skipped.
-                    Scope1 := '';
-                    Scope2 := '';
-                    GapVal := 0;
-                    Try Scope1 := RuleClear.Scope1Expression; Except End;
-                    Try Scope2 := RuleClear.Scope2Expression; Except End;
-                    Try GapVal := RuleClear.Gap; Except End;
+                S1 := ''; S2 := ''; G := 0;
+                Try S1 := Rule.Scope1Expression; Except End;
+                Try S2 := Rule.Scope2Expression; Except End;
+                Try G := Rule.Gap; Except End;
 
-                    For NA := 0 To 15 Do
+                NetName := '';
+                ClassSide := '';
+                If Not (HasNegation(S1) Or HasNegation(S2)) Then
+                Begin
+                    If (ExtractNetName(S1) <> '') And (NthNetClassName(S2, 0) <> '') Then
                     Begin
-                        ClassA := NthNetClassName(Scope1, NA);
-                        If ClassA = '' Then
+                        NetName := ExtractNetName(S1);
+                        ClassSide := S2;
+                    End
+                    Else If (ExtractNetName(S2) <> '') And (NthNetClassName(S1, 0) <> '') Then
+                    Begin
+                        NetName := ExtractNetName(S2);
+                        ClassSide := S1;
+                    End;
+                End;
+
+                If (NetName <> '') And (G > 0) Then
+                Begin
+                    For N := 0 To 15 Do
+                    Begin
+                        ClassName := NthNetClassName(ClassSide, N);
+                        If ClassName = '' Then Break;
+                        If ClassName <> NetName Then
                         Begin
-                            // No class on this side; fall back to a net name that happens
-                            // to also be a class (Altium allows both to share a name).
-                            If NA > 0 Then Break;
-                            ClassA := ExtractNetName(Scope1);
-                            If (ClassA = '') Or (Not IsNetClassName(Board, ClassA)) Then Break;
-                        End;
-                        For NB := 0 To 15 Do
-                        Begin
-                            ClassB := NthNetClassName(Scope2, NB);
-                            If ClassB = '' Then
-                            Begin
-                                If NB > 0 Then Break;
-                                ClassB := ExtractNetName(Scope2);
-                                If (ClassB = '') Or (Not IsNetClassName(Board, ClassB)) Then Break;
-                            End;
-                            If ClassA <> ClassB Then
-                            Begin
-                                If Not First Then OutLines.Add('    },');
-                                First := False;
-                                OutLines.Add('    { "classes": [' + JStr(ClassA) + ', ' + JStr(ClassB) +
-                                    '], "clearance": ' + CoordMils(GapVal) + ' ');
-                            End;
+                            If Not First Then OutLines.Add('    },');
+                            First := False;
+                            OutLines.Add('    { "classes": [' + JStr(NetName) + ', ' + JStr(ClassName) +
+                                '], "clearance": ' + CoordMils(G) + ' ');
                         End;
                     End;
                 End;
             End;
-            RuleClear := Iter.NextPCBObject;
+            Rule := Iter.NextPCBObject;
         End;
         If Not First Then OutLines.Add('    }');
     Finally
         Board.BoardIterator_Destroy(Iter);
+    End;
+    OutLines.Add('  ],');
+
+    // Make the losses visible in the exported file. The importer ignores unknown
+    // top-level keys, so this costs nothing on the freerouting side.
+    OutLines.Add('  "_dropped_clearance_rules": [');
+    For N := 0 To DroppedRules.Count - 1 Do
+    Begin
+        If N < DroppedRules.Count - 1 Then
+            OutLines.Add(DroppedRules.Strings[N] + ',')
+        Else
+            OutLines.Add(DroppedRules.Strings[N]);
     End;
     OutLines.Add('  ],');
 End;
@@ -1831,7 +1737,13 @@ Begin
     End;
 
     OutLines := TStringList.Create;
+    NetRuleNets := TStringList.Create;
+    DroppedRules := TStringList.Create;
     Try
+        // Must run before WriteNetClasses: it decides which single-net classes that
+        // procedure has to emit, and which rules WriteClearanceMatrix can express.
+        CollectNetScopedRuleNets(Board);
+
         OutLines.Add('{');
         OutLines.Add('  "frpcb_version": 1,');
         OutLines.Add('  "unit": "mil",');
@@ -1850,8 +1762,12 @@ Begin
 
         OutFileName := ChangeFileExt(Board.FileName, '.frpcb.json');
         OutLines.SaveToFile(OutFileName);
-        ShowMessage('Wrote ' + OutFileName);
+        ShowMessage('Wrote ' + OutFileName + #13#10 +
+            'Class-to-class clearances are NOT in this file - import it with' + #13#10 +
+            '-dc Constraints.xml, or leave Constraints.xml next to it.');
     Finally
+        DroppedRules.Free;
+        NetRuleNets.Free;
         OutLines.Free;
     End;
 End;

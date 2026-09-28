@@ -334,6 +334,23 @@ FRPCB does not attempt to carry them:
 - **Drill diameter as a queried field** — carried in FRPCB for
   documentation/fab purposes, but freerouting's `Padstack` model has no
   drill-size field for the router to consult.
+- **Per-object-type clearance** (`OBJECTCLEARANCES` in `Constraints.xml`).
+  Altium refines a single clearance rule by the *kind* of object on each side;
+  the reference board carries, among others:
+
+  | pair | Altium | vs. the rule's generic 8 mil |
+  |---|---|---|
+  | SMD pad ↔ SMD pad | 7.8 mil | **looser** |
+  | through-hole pad ↔ via | 0 mil | **looser** |
+  | track ↔ track, arc ↔ arc, text ↔ text | 9 mil | tighter |
+
+  `ClearanceMatrix` is indexed by class × class × layer only — there is no
+  object-type dimension anywhere in `eu.mihosoft.freerouting.rules` — so this
+  cannot be represented. The consequence is one-directional and worth knowing:
+  freerouting enforces the *generic* value everywhere, so it is **stricter** than
+  Altium on the two looser pairs above. On the reference board that accounts for
+  a group of pad-to-pad "violations" that Altium's own DRC passes, because
+  Altium allows 7.8 mil there and this importer requires 8.
 
 ## Versioning
 
