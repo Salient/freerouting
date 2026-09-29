@@ -181,6 +181,26 @@ Begin
     Try Result := Rule.Priority; Except End;
 End;
 
+{ Whether a board-outline-clearance scope applies to copper in general, as opposed to one
+  specific net or to non-copper objects. FRPCB carries a single board-edge clearance, so the
+  rule that governs general copper is the only one it can represent; a rule scoped to one net
+  (CHASSIS at 10 mil on the reference board) cannot be, and is reported in
+  _board_outline_rules instead.
+
+  "(Not InNet('CHASSIS'))" DOES cover general copper and must not be excluded, hence the test
+  for a negation before rejecting an InNet scope. }
+Function ScopeCoversGeneralCopper(ScopeExpr : String) : Boolean;
+Var
+    Lower : String;
+Begin
+    Lower := LowerCase(ScopeExpr);
+    Result := True;
+    { A scope keyed on a text string is not copper at all. }
+    If Pos('stringtext', Lower) > 0 Then Result := False;
+    { A positive InNet(...) singles out one net; a negated one does not. }
+    If (Pos('innet(', Lower) > 0) And (Pos('not ', Lower) = 0) Then Result := False;
+End;
+
 Function BoardOutlineClearance(Board : IPCB_Board) : TCoord;
 Const
     RULEKIND_BOARD_OUTLINE_CLEARANCE = 63;
@@ -190,12 +210,12 @@ Var
     Kind : Integer;
     G    : TCoord;
     Nm, S1 : String;
-    P, BestAllPrio, BestAnyPrio : Integer;
-    BestAll, BestAny : TCoord;
+    P, BestAnyPrio : Integer;
+    BestAny : TCoord;
 Begin
     Result := 0;
-    BestAllPrio := 999999; BestAnyPrio := 999999;
-    BestAll := -1; BestAny := -1;
+    BestAnyPrio := 999999;
+    BestAny := -1;
     Iter := Board.BoardIterator_Create;
     Try
         Iter.AddFilter_ObjectSet(MkSet(eRuleObject));
@@ -226,16 +246,17 @@ Begin
                     // and produced 931 violations Altium does not report; at 10 mil every one
                     // of them disappears, confirming the All rule outranks the others here.
                     //
-                    // An All-scoped rule is preferred at equal standing because FRPCB carries
-                    // a single board-edge clearance, so the rule that governs all copper is
-                    // the only one it can represent. A rule scoped to a subset - CHASSIS at
-                    // 10 mil here - cannot be expressed and is reported above instead.
-                    If (S1 = 'All') And (P < BestAllPrio) Then
-                    Begin
-                        BestAllPrio := P;
-                        BestAll := G;
-                    End;
-                    If P < BestAnyPrio Then
+                    // Which rule governs GENERAL copper is the question, and priority 1 is
+                    // not necessarily it: here priority 1 is InNet('CHASSIS'), which does not
+                    // match ordinary copper at all. So scopes that single out one net are
+                    // skipped, as is the text scope, and the best remaining priority wins -
+                    // on this board that is (Not InNet('CHASSIS')) at priority 2, so 100 mil,
+                    // NOT the All rule's 10 mil at priority 4.
+                    //
+                    // Preferring the All rule, as a first attempt did, happened to make
+                    // freerouting's violation count look right, but only because a separate
+                    // bug was inflating the check to ~150 mil. Two wrongs.
+                    If ScopeCoversGeneralCopper(S1) And (P < BestAnyPrio) Then
                     Begin
                         BestAnyPrio := P;
                         BestAny := G;
@@ -247,8 +268,7 @@ Begin
     Finally
         Board.BoardIterator_Destroy(Iter);
     End;
-    If BestAll >= 0 Then Result := BestAll
-    Else If BestAny >= 0 Then Result := BestAny;
+    If BestAny >= 0 Then Result := BestAny;
 End;
 
 Procedure WriteBoardOutline(Board : IPCB_Board);

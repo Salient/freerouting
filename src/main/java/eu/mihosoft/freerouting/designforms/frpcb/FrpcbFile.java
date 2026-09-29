@@ -219,10 +219,25 @@ public class FrpcbFile
             clearance_matrix.append_class(OUTLINE_CLEARANCE_CLASS);
             int outline_class_no = clearance_matrix.get_no(OUTLINE_CLEARANCE_CLASS);
             int clearance = (int) Math.round(len.to_board(outline_clearance));
-            // Every other class has to keep this clearance to the outline, so set the
-            // whole row/column rather than only the diagonal cell.
+            // Every other class has to keep this clearance to the outline, so set the whole
+            // row and column -- but NOT the diagonal. The diagonal is the class's self
+            // clearance, and ClearanceMatrix.clearance_compensation_value is half of it, used
+            // to pre-enlarge every shape of the class in the search tree. An edge clearance is
+            // a distance from other copper, not a spacing the outline owes itself, so putting
+            // it on the diagonal is wrong in principle.
+            //
+            // Note this is currently inert: SearchTreeManager initialises
+            // clearance_compensation_used to false, so nothing reads the diagonal. It was
+            // changed while testing whether compensation explained freerouting reporting 931
+            // board-outline violations against copper that is genuinely 58 to 150 mil from the
+            // outline. It does not - the count is identical either way - and that over-report
+            // is still unexplained.
             for (int i = 0; i < clearance_matrix.get_class_count(); ++i)
             {
+                if (i == outline_class_no)
+                {
+                    continue;
+                }
                 clearance_matrix.set_value(outline_class_no, i, clearance);
                 clearance_matrix.set_value(i, outline_class_no, clearance);
             }
