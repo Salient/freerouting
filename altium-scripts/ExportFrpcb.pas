@@ -172,6 +172,15 @@ Begin
     Try Result := Rule.Enabled; Except End;
 End;
 
+{ Altium's rule priority: 1 is the highest, and for overlapping rules the highest-priority
+  matching rule WINS - the others are simply not applied. Defaults to a very low priority
+  when the property is unavailable, so an unreadable rule never outranks a readable one. }
+Function RulePriority(Rule : IPCB_Rule) : Integer;
+Begin
+    Result := 999999;
+    Try Result := Rule.Priority; Except End;
+End;
+
 Function BoardOutlineClearance(Board : IPCB_Board) : TCoord;
 Const
     RULEKIND_BOARD_OUTLINE_CLEARANCE = 63;
@@ -181,8 +190,12 @@ Var
     Kind : Integer;
     G    : TCoord;
     Nm, S1 : String;
+    P, BestAllPrio, BestAnyPrio : Integer;
+    BestAll, BestAny : TCoord;
 Begin
     Result := 0;
+    BestAllPrio := 999999; BestAnyPrio := 999999;
+    BestAll := -1; BestAny := -1;
     Iter := Board.BoardIterator_Create;
     Try
         Iter.AddFilter_ObjectSet(MkSet(eRuleObject));
@@ -200,19 +213,42 @@ Begin
                 Nm := ''; S1 := '';
                 Try Nm := Rule.Name; Except End;
                 Try S1 := Rule.Scope1Expression; Except End;
-                // Recorded for every outline rule, enabled or not. FRPCB carries ONE
-                // board-edge clearance, so a rule scoped to a subset of nets (an HV class,
-                // say) still gets applied to all copper - which over-constrains everything
-                // else. This diagnostic is what makes that visible instead of inferred.
+                P := RulePriority(Rule);
                 OutlineRules.Add('    { "rule": ' + JStr(Nm) + ', "scope": ' + JStr(S1) +
-                    ', "clearance": ' + CoordMils(G) + ', "enabled": ' + BoolStr(RuleEnabled(Rule)) + ' }');
-                If RuleEnabled(Rule) And (G > Result) Then Result := G;
+                    ', "clearance": ' + CoordMils(G) + ', "priority": ' + IntToStr(P) +
+                    ', "enabled": ' + BoolStr(RuleEnabled(Rule)) + ' }');
+                If RuleEnabled(Rule) Then
+                Begin
+                    // Pick by PRIORITY, not by the largest gap. This board carries four
+                    // enabled board-outline rules whose scopes overlap - All at 10 mil and
+                    // (Not InNet('CHASSIS')) at 100 - and Altium applies only the
+                    // highest-priority match. Taking the maximum gave 100 mil for all copper
+                    // and produced 931 violations Altium does not report; at 10 mil every one
+                    // of them disappears, confirming the All rule outranks the others here.
+                    //
+                    // An All-scoped rule is preferred at equal standing because FRPCB carries
+                    // a single board-edge clearance, so the rule that governs all copper is
+                    // the only one it can represent. A rule scoped to a subset - CHASSIS at
+                    // 10 mil here - cannot be expressed and is reported above instead.
+                    If (S1 = 'All') And (P < BestAllPrio) Then
+                    Begin
+                        BestAllPrio := P;
+                        BestAll := G;
+                    End;
+                    If P < BestAnyPrio Then
+                    Begin
+                        BestAnyPrio := P;
+                        BestAny := G;
+                    End;
+                End;
             End;
             Rule := Iter.NextPCBObject;
         End;
     Finally
         Board.BoardIterator_Destroy(Iter);
     End;
+    If BestAll >= 0 Then Result := BestAll
+    Else If BestAny >= 0 Then Result := BestAny;
 End;
 
 Procedure WriteBoardOutline(Board : IPCB_Board);
