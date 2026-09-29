@@ -66,7 +66,11 @@ public class SessionFile
         String session_name = p_design_name.replace(".dsn", ".ses");
         try
         {
-            String [] reserved_chars = {"(", ")", " ", "-"};
+            // Only the characters Altium itself escapes. Its own Specctra export writes hyphens and
+            // underscores literally and quotes nothing at all, and escape_reserved already handles
+            // these three, so in practice no name gets quoted - which is the point: quoting a name
+            // that ends in a backslash produced an unterminated string that hung Altium.
+            String [] reserved_chars = {"(", ")", " "};
             IdentifierType identifier_type = new IdentifierType(reserved_chars, p_board.communication.specctra_parser_info.string_quote);
             write_session_scope(p_board, identifier_type, output_file, session_name, p_design_name);
         }
@@ -116,7 +120,11 @@ public class SessionFile
         }
         try
         {
-            String [] reserved_chars = {"(", ")", " ", "-"};
+            // Only the characters Altium itself escapes. Its own Specctra export writes hyphens and
+            // underscores literally and quotes nothing at all, and escape_reserved already handles
+            // these three, so in practice no name gets quoted - which is the point: quoting a name
+            // that ends in a backslash produced an unterminated string that hung Altium.
+            String [] reserved_chars = {"(", ")", " "};
             IdentifierType identifier_type = new IdentifierType(reserved_chars, p_board.communication.specctra_parser_info.string_quote);
             double scale_factor = p_board.communication.coordinate_transform.dsn_to_board(1) / p_board.communication.resolution;
             CoordinateTransform coordinate_transform = new CoordinateTransform(scale_factor, 0, 0);

@@ -49,7 +49,10 @@ public class WriteScopeParameter
         file = p_file;
         coordinate_transform = p_coordinate_transform;
         compat_mode = p_compat_mode;
-        String[] reserved_chars = {"(", ")", " ", ";", "-", "_"};
+        // Only what Altium escapes, plus ';' which is a Specctra comment character. Altium writes
+        // hyphens and underscores literally; quoting every name containing '_' would have quoted
+        // most nets on a real board, and quoting is unsafe for names ending in a backslash.
+        String[] reserved_chars = {"(", ")", " ", ";"};
         identifier_type = new IdentifierType(reserved_chars, p_string_quote);
     }
     

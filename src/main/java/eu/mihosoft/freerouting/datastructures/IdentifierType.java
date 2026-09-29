@@ -51,13 +51,14 @@ public class IdentifierType
     {
         try
         {
-            if (is_legal(p_name))
+            String name = escape_reserved(p_name);
+            if (is_legal(name))
             {
-                p_file.write(p_name);
+                p_file.write(name);
             }
             else
             {
-                p_file.write(quote(p_name));
+                p_file.write(quote(name));
             }
         }
         catch (java.io.IOException e)
@@ -66,6 +67,31 @@ public class IdentifierType
         }
     }
     
+
+    /**
+     * Encodes the characters Altium escapes in its own Specctra output, so a name never has to
+     * be quoted for containing one.
+     *
+     * <p>Taken from an Altium-generated .dsn of this very board, not from the Specctra spec: it
+     * quotes nothing at all (zero quoted net names in the file) and writes ~SP~ for a space,
+     * ~LP~ for '(' and ~RP~ for ')', 7901 / 120 / 118 times respectively. Backslashes and
+     * hyphens it passes through literally.
+     *
+     * <p>Quoting these instead is not merely unconventional, it is unsafe. This board uses
+     * Altium's overbar notation, so net names are full of backslashes and several END with one -
+     * "R\E\A\D\Y\ \F\I\R\E\". Quoted, the trailing backslash escapes the closing quote and
+     * the string never terminates, so Altium consumed the rest of the file as one token. That
+     * produced thousands of traces fanned off to the coordinate origin, and hung Altium.
+     */
+    private static String escape_reserved(String p_name)
+    {
+        if (p_name == null)
+        {
+            return p_name;
+        }
+        return p_name.replace("(", "~LP~").replace(")", "~RP~").replace(" ", "~SP~");
+    }
+
     /**
      * Looks, if p_string dous not contain reserved characters or blanks.
      */
