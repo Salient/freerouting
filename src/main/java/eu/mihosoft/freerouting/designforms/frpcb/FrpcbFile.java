@@ -456,8 +456,9 @@ public class FrpcbFile
                 }
                 if (snapped_wire_ends > 0)
                 {
-                    FRLogger.info("Snapped " + snapped_wire_ends + " wire end(s) onto the centre of"
-                            + " a pad or via they already overlapped, so the connection registers");
+                    FRLogger.info("Extended " + snapped_wire_ends + " wire end(s) into the centre of"
+                            + " a pad or via they already overlapped, so the connection registers"
+                            + " without moving any existing copper");
                 }
                 if (zero_length_wires > 0)
                 {
@@ -1407,13 +1408,12 @@ public class FrpcbFile
 
     /**
      * Returns the centre of a same-net pin or via on p_layer whose shape contains p_corner, or
-     * p_corner unchanged when there is none.
+     * null when there is none.
      *
-     * <p>Deliberately conservative: it only moves an endpoint that is ALREADY inside the pad,
-     * so a wire is never dragged onto something it did not touch. That is exactly the case
-     * Altium produces and freerouting's exact-coincidence contact test rejects.
+     * <p>Deliberately conservative: it only considers a pad the endpoint is ALREADY inside, so
+     * a wire is never extended towards something it did not touch.
      */
-    private static IntPoint snap_to_pad_center(IntPoint p_corner, int p_layer, Net p_net, RoutingBoard p_board)
+    private static IntPoint pad_center_at(IntPoint p_corner, int p_layer, Net p_net, RoutingBoard p_board)
     {
         if (p_corner == null || p_net == null)
         {
@@ -1436,17 +1436,46 @@ public class FrpcbFile
                 Point center = ((eu.mihosoft.freerouting.board.DrillItem) curr_item).get_center();
                 if (center instanceof IntPoint && !center.equals(p_corner))
                 {
-                    ++snapped_wire_ends;
                     return (IntPoint) center;
                 }
-                return p_corner;
+                return null;
             }
         }
         catch (Exception e)
         {
             // A failed lookup must not stop the wire being imported.
         }
-        return p_corner;
+        return null;
+    }
+
+    /**
+     * Returns p_corners with p_start_center prepended and p_end_center appended, skipping either
+     * when it is null. Counts the ends extended, for one summary line per import.
+     */
+    private static IntPoint[] extend_into_pads(IntPoint[] p_corners, IntPoint p_start_center, IntPoint p_end_center)
+    {
+        int extra = (p_start_center == null ? 0 : 1) + (p_end_center == null ? 0 : 1);
+        if (extra == 0)
+        {
+            return p_corners;
+        }
+        IntPoint[] result = new IntPoint[p_corners.length + extra];
+        int at = 0;
+        if (p_start_center != null)
+        {
+            result[at++] = p_start_center;
+            ++snapped_wire_ends;
+        }
+        for (IntPoint corner : p_corners)
+        {
+            result[at++] = corner;
+        }
+        if (p_end_center != null)
+        {
+            result[at++] = p_end_center;
+            ++snapped_wire_ends;
+        }
+        return result;
     }
 
     /**
@@ -1484,15 +1513,25 @@ public class FrpcbFile
             JSONArray point = path.getJSONArray(i);
             corners[i] = p_len.to_board_point(point.getDouble(0), point.getDouble(1));
         }
-        // Snap the two ends onto the centre of any same-net pad or via they already sit
-        // inside. Trace.get_normal_contacts requires a trace endpoint to EQUAL the centre of
-        // a pin or via, or the endpoint of another trace, before it counts as connected -
-        // overlapping the pad is not enough. Altium's connectivity is geometric, so its
-        // routes legitimately stop short of, or run past, the pad centre, and every one of
-        // those arrived here as a phantom incomplete connection.
-        corners[0] = snap_to_pad_center(corners[0], layer_no, board_net, p_board);
-        corners[corners.length - 1] =
-                snap_to_pad_center(corners[corners.length - 1], layer_no, board_net, p_board);
+        // EXTEND each end into the centre of any same-net pad or via it already sits inside,
+        // by adding a corner rather than moving the existing one.
+        //
+        // Trace.get_normal_contacts requires a trace endpoint to EQUAL the centre of a pin or
+        // via before it counts as connected; overlapping the pad is not enough. Altium's
+        // connectivity is geometric, so its routes legitimately stop short of, or run past, a
+        // pad centre, and every one of those arrived as a phantom incomplete connection.
+        //
+        // An earlier version REPLACED the end corner with the pad centre. That connected the
+        // net but distorted the route: measured over this board the displacement had a median
+        // of 3.8 mil, a p99 of 34 and a maximum of 91.8, because a big pad drags the last
+        // segment right across itself. 1518 ends moved more than 10 mil, which showed up in
+        // Altium as visibly kinked traces. Adding a corner instead leaves the original geometry
+        // untouched, and the new segment lies wholly inside the pad it terminates in - pad
+        // shapes here are convex, so the straight line from a point inside one to its centre
+        // cannot leave it. No new copper outside what Altium already has.
+        IntPoint start_center = pad_center_at(corners[0], layer_no, board_net, p_board);
+        IntPoint end_center = pad_center_at(corners[corners.length - 1], layer_no, board_net, p_board);
+        corners = extend_into_pads(corners, start_center, end_center);
 
         Polygon polygon = new Polygon(corners);
         if (polygon.corner_array().length < 2)
