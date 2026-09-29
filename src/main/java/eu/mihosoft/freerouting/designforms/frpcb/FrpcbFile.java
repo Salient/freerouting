@@ -232,7 +232,18 @@ public class FrpcbFile
             // board-outline violations against copper that is genuinely 58 to 150 mil from the
             // outline. It does not - the count is identical either way - and that over-report
             // is still unexplained.
-            for (int i = 0; i < clearance_matrix.get_class_count(); ++i)
+            // Start at 1, NOT 0. Class 0 is the "null" class (see
+            // ClearanceMatrix.get_default_instance), and the search tree uses it as its
+            // compensation reference: ShapeSearchTree.clearance_compensation_value returns
+            // value(this_class, compensated_clearance_class_no), which for the default tree is
+            // value(outline, 0). Setting that cell made the tree bake the whole edge clearance
+            // into the outline's stored shape - probed at 202 mil wide for a 100 mil rule, i.e.
+            // 101 mil per side off a 1 mil centreline - and Item.clearance_violations then
+            // enlarged both shapes by half the clearance on top of that. The edge rule was
+            // effectively enforced at around 150 mil, which is what produced 931 violations
+            // against copper genuinely 58 to 150 mil from the outline when only 5 pieces of
+            // non-CHASSIS copper are truly inside 100 mil.
+            for (int i = 1; i < clearance_matrix.get_class_count(); ++i)
             {
                 if (i == outline_class_no)
                 {
@@ -284,10 +295,35 @@ public class FrpcbFile
         JSONArray vias_arr = root.optJSONArray("vias");
         if (vias_arr != null)
         {
+            // Collected in order and registered as the board's via padstacks. Without this
+            // BoardLibrary.via_padstacks stays null, and SessionFile.write_library iterates
+            // via_padstack_count() -- so a written .ses or .rte carried an EMPTY (library_out),
+            // while its (via ...) entries still referenced padstacks by name. Altium's route
+            // import then failed with "List index out of bounds (0)", dropped every trace, and
+            // left a handful of zero-width net-less objects at the coordinate origin. Only the
+            // DSN reader (specctra/Library) was calling this.
+            java.util.LinkedHashMap<String, Padstack> via_padstacks = new java.util.LinkedHashMap<>();
             for (int i = 0; i < vias_arr.length(); ++i)
             {
                 JSONObject via_obj = vias_arr.getJSONObject(i);
                 read_via(via_obj, board, padstacks_by_name, via_rules_by_name);
+                String via_padstack_name = via_obj.optString("padstack", null);
+                Padstack via_padstack = via_padstack_name == null ? null : padstacks_by_name.get(via_padstack_name);
+                if (via_padstack != null)
+                {
+                    via_padstacks.put(via_padstack.name, via_padstack);
+                }
+            }
+            if (!via_padstacks.isEmpty())
+            {
+                board.library.set_via_padstacks(via_padstacks.values().toArray(new Padstack[0]));
+                FRLogger.info("Registered " + via_padstacks.size()
+                        + " via padstack(s) in the board library: " + via_padstacks.keySet());
+            }
+            else
+            {
+                FRLogger.warn("FrpcbFile: no via padstack could be registered; a written .ses or"
+                        + " .rte will have an empty library_out and Altium will refuse it");
             }
         }
 
