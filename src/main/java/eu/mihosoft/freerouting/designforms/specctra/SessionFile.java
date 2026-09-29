@@ -312,6 +312,35 @@ public class SessionFile
         }
     }
 
+
+    /**
+     * The layer name Altium's Specctra importer recognises, which is NOT the layer's name on
+     * the board.
+     *
+     * <p>Altium's own .dsn of a six-layer board declares exactly TopLayer, MidLayer1 through
+     * MidLayer4 and BottomLayer, and its wires reference those. The board's layer names are the
+     * human ones - "Top Layer", "GND", "Sig [Horiz]" - and writing those into a route file left
+     * Altium unable to match any layer, so it placed every imported trace on every layer at once.
+     *
+     * <p>Positional, because that is what the identifiers mean: first signal layer is the top,
+     * last is the bottom, the rest are MidLayer1..n in order. Boards whose inner layers Altium
+     * models as internal planes rather than mid signal layers would need more than this; the
+     * reference board has none, and its six layers map exactly.
+     */
+    private static String altium_layer_name(BasicBoard p_board, int p_layer_no)
+    {
+        int count = p_board.layer_structure.arr.length;
+        if (p_layer_no <= 0)
+        {
+            return "TopLayer";
+        }
+        if (p_layer_no >= count - 1)
+        {
+            return "BottomLayer";
+        }
+        return "MidLayer" + p_layer_no;
+    }
+
     private static void write_routes(BasicBoard p_board, IdentifierType p_identifier_type, CoordinateTransform p_coordinate_transform,
             IndentFileWriter p_file) throws java.io.IOException
     {
@@ -336,6 +365,39 @@ public class SessionFile
         p_file.end_scope();
     }
     
+
+    /**
+     * The dsn diameter when p_padstack is the same circle on every layer of the board, else null.
+     * Used to write a through-hole via padstack the way Altium does.
+     */
+    private static Integer uniform_circle_diameter(eu.mihosoft.freerouting.library.Padstack p_padstack,
+            BasicBoard p_board, CoordinateTransform p_coordinate_transform)
+    {
+        int radius = -1;
+        for (int i = 0; i < p_board.get_layer_count(); ++i)
+        {
+            eu.mihosoft.freerouting.geometry.planar.Shape curr_shape = p_padstack.get_shape(i);
+            if (!(curr_shape instanceof eu.mihosoft.freerouting.geometry.planar.Circle))
+            {
+                return null;
+            }
+            int curr_radius = ((eu.mihosoft.freerouting.geometry.planar.Circle) curr_shape).radius;
+            if (radius < 0)
+            {
+                radius = curr_radius;
+            }
+            else if (radius != curr_radius)
+            {
+                return null;
+            }
+        }
+        if (radius <= 0)
+        {
+            return null;
+        }
+        return (int) Math.round(p_coordinate_transform.board_to_dsn(2 * radius));
+    }
+
     private static void write_padstack(eu.mihosoft.freerouting.library.Padstack p_padstack, BasicBoard p_board, IdentifierType p_identifier_type,
                                        CoordinateTransform p_coordinate_transform, IndentFileWriter p_file)
             throws java.io.IOException
@@ -368,6 +430,31 @@ public class SessionFile
         p_file.start_scope();
         p_file.write("padstack ");
         p_identifier_type.write(p_padstack.name, p_file);
+
+        // Altium writes a via padstack as ONE shape on the pseudo-layer "signal":
+        //     (padstack Via1_TB (shape (circle signal 22.0000)))
+        // not one shape per named layer, which is what this used to emit. Matched here for a
+        // padstack that is the same circle on every layer - which is exactly a through-hole via.
+        // Note Altium's own file defines no drill for a via padstack either; it takes the hole
+        // from its via style.
+        Integer uniform_diameter = uniform_circle_diameter(p_padstack, p_board, p_coordinate_transform);
+        if (uniform_diameter != null)
+        {
+            // On ONE line, as Altium writes it. This file already documents that Altium's
+            // route importer cannot parse a wire whose (path ...) is split across lines and
+            // silently drops it; a padstack shape split the same way is the likeliest reason
+            // our definitions were ignored and every via came in with a default 50 mil pad.
+            p_file.new_line();
+            p_file.write("(shape (circle signal " + uniform_diameter + "))");
+            if (!p_padstack.attach_allowed)
+            {
+                p_file.new_line();
+                p_file.write("(attach off)");
+            }
+            p_file.end_scope();
+            return;
+        }
+
         for (int i = first_layer_no; i <= last_layer_no; ++i)
         {
             eu.mihosoft.freerouting.geometry.planar.Shape curr_board_shape = p_padstack.get_shape(i);
@@ -376,7 +463,7 @@ public class SessionFile
                 continue;
             }
             eu.mihosoft.freerouting.board.Layer board_layer = p_board.layer_structure.arr[i];
-            Layer curr_layer = new Layer(board_layer.name, i, board_layer.is_signal);
+            Layer curr_layer = new Layer(altium_layer_name(p_board, i), i, board_layer.is_signal);
             Shape curr_shape = p_coordinate_transform.board_to_dsn_rel(curr_board_shape, curr_layer);
             p_file.start_scope();
             p_file.write("shape");
@@ -499,7 +586,7 @@ public class SessionFile
         // (net ...) and (type ...) or it is not bound to a net on import.
         p_file.new_line();
         p_file.write("(wire (path ");
-        p_identifier_type.write(board_layer.name, p_file);
+        p_identifier_type.write(altium_layer_name(p_board, layer_no), p_file);
         p_file.write(" ");
         p_file.write(Integer.valueOf(wire_width).toString());
         int corner_count = coors.length / 2;
@@ -578,7 +665,7 @@ public class SessionFile
         eu.mihosoft.freerouting.geometry.planar.Area curr_area = p_conduction_area.get_area();
         int layer_no = p_conduction_area.get_layer();
         eu.mihosoft.freerouting.board.Layer board_layer = p_board.layer_structure.arr[ layer_no];
-        Layer conduction_layer = new Layer(board_layer.name, layer_no, board_layer.is_signal);
+        Layer conduction_layer = new Layer(altium_layer_name(p_board, layer_no), layer_no, board_layer.is_signal);
         eu.mihosoft.freerouting.geometry.planar.Shape boundary_shape;
         eu.mihosoft.freerouting.geometry.planar.Shape [] holes;
         if (curr_area instanceof eu.mihosoft.freerouting.geometry.planar.Shape)
