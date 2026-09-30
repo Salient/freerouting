@@ -55,7 +55,13 @@ class BoardPanelStatus extends javax.swing.JPanel
     {
         java.util.ResourceBundle resources =
                 java.util.ResourceBundle.getBundle("eu.mihosoft.freerouting.gui.BoardPanelStatus", p_locale);
-        this.setLayout(new java.awt.BorderLayout());
+        // GridBagLayout, not BorderLayout. BorderLayout always hands WEST and EAST their
+        // preferred width and gives CENTER only what is left, so once the window got narrow
+        // the message was starved to nothing while the fixed-width fields beside it still held
+        // their full reservation open - hundreds of pixels of visibly EMPTY space next to
+        // clipped text. GridBag shrinks components toward their minimum instead, so the fields
+        // give back the room they are not using before the message loses any.
+        this.setLayout(new java.awt.GridBagLayout());
 
         // Cursor position and the net under it, both on the left so they sit still while
         // everything else changes, and so neither ends up beside the autorouter's counters.
@@ -77,12 +83,20 @@ class BoardPanelStatus extends javax.swing.JPanel
         net_info.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, 8, 0, 8));
         left_panel.add(net_info, java.awt.BorderLayout.EAST);
 
-        this.add(left_panel, java.awt.BorderLayout.WEST);
+        java.awt.GridBagConstraints gbc = new java.awt.GridBagConstraints();
+        gbc.fill = java.awt.GridBagConstraints.HORIZONTAL;
+        gbc.gridy = 0;
+        gbc.weightx = 0.0;
+        this.add(left_panel, gbc);
 
         status_message = new javax.swing.JLabel();
         status_message.setHorizontalAlignment(javax.swing.SwingConstants.LEFT);
         status_message.setText(resources.getString("status_line"));
-        this.add(status_message, java.awt.BorderLayout.CENTER);
+        // The only component with weight: all spare width goes here, and it is the last to be
+        // squeezed when width runs short.
+        gbc.weightx = 1.0;
+        this.add(status_message, gbc);
+        gbc.weightx = 0.0;
 
         javax.swing.JPanel right_panel = new javax.swing.JPanel();
         right_panel.setLayout(new javax.swing.BoxLayout(right_panel, javax.swing.BoxLayout.X_AXIS));
@@ -112,7 +126,7 @@ class BoardPanelStatus extends javax.swing.JPanel
         current_layer.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, 8, 0, 8));
         right_panel.add(current_layer);
 
-        this.add(right_panel, java.awt.BorderLayout.EAST);
+        this.add(right_panel, gbc);
 
         monospace(mouse_position);
         monospace(pass_message);
@@ -125,10 +139,19 @@ class BoardPanelStatus extends javax.swing.JPanel
         // Widths measured with FontMetrics against the longest string each field actually
         // shows, plus its padding - not estimated. Under-reserving clips the field ("to route:
         // 532, routed..."), over-reserving steals room from the message.
-        fix_width(mouse_position, 175);   // "x= 14432.5  y= 13880.0"        mono 154
-        fix_width(pass_message, 70);      // "Pass 12"                        mono  49
-        fix_width(add_message, 210);      // "to route: 532, routed: 10, "    mono 189
-        fix_width(current_layer, 200);    // "current layer: Sig [Horiz]"     mono 182
+        // Preferred width is what the longest real text needs, so at a comfortable window
+        // size the layout is identical to before and a changing digit still cannot nudge its
+        // neighbours. Minimum width is deliberately much smaller: it is the floor the field
+        // may be compressed to when the window is too narrow for everyone's preference. That
+        // pair is the whole fix - pinning minimum == maximum == preferred, as this used to,
+        // made the fields incompressible and forced the message to absorb every shortfall.
+        flex_width(mouse_position, 175, 70);   // "x= 14432.5  y= 13880.0"      mono 154
+        flex_width(pass_message, 70, 32);      // "Pass 12"                     mono  49
+        flex_width(add_message, 210, 60);      // "to route: 532, routed: 10, " mono 189
+        flex_width(current_layer, 200, 60);    // "current layer: Sig [Horiz]"  mono 182
+        // A floor for the message too, so the fields cannot take everything from it either.
+        status_message.setMinimumSize(new java.awt.Dimension(
+                80, status_message.getPreferredSize().height));
         // net_info is sized on demand by ScreenMessages: it is empty whenever the autorouter
         // is running, which is precisely when the long "press left button to stop" message
         // needs the room, so holding 210 pixels open for it the rest of the time does not fit.
@@ -149,13 +172,30 @@ class BoardPanelStatus extends javax.swing.JPanel
                 p_label.getFont().getSize()));
     }
 
-    /** Fixes a label's width, leaving its height to the font so text is never clipped. */
-    private static void fix_width(javax.swing.JLabel p_label, int p_width)
+    /**
+     * Gives a label a preferred width and a smaller floor it may be compressed to, leaving
+     * its height to the font so text is never clipped vertically.
+     *
+     * <p>Maximum is pinned to the preferred width so a field never grows past what its text
+     * needs and steals room from the message; minimum is what lets it shrink when the window
+     * cannot satisfy everyone.
+     */
+    private static void flex_width(javax.swing.JLabel p_label, int p_preferred, int p_minimum)
     {
-        int height = p_label.getPreferredSize().height;
-        p_label.setPreferredSize(new java.awt.Dimension(p_width, height));
-        p_label.setMinimumSize(new java.awt.Dimension(p_width, height));
-        p_label.setMaximumSize(new java.awt.Dimension(p_width, height));
+        // Height from FONT METRICS, not from getPreferredSize(). A JLabel whose text is empty
+        // reports a preferred height of zero, and pass_message is constructed empty - so
+        // pinning its maximum height to its preferred height pinned it to ZERO, and BoxLayout
+        // honours maximum, meaning the pass-number field was laid out zero pixels tall and
+        // never became visible even after set_pass_number gave it text. Deriving the height
+        // from the font makes a field's height independent of whether it happens to be empty
+        // at construction.
+        java.awt.FontMetrics fm = p_label.getFontMetrics(p_label.getFont());
+        java.awt.Insets insets = p_label.getInsets();
+        int height = Math.max(p_label.getPreferredSize().height,
+                fm.getAscent() + fm.getDescent() + insets.top + insets.bottom);
+        p_label.setPreferredSize(new java.awt.Dimension(p_preferred, height));
+        p_label.setMinimumSize(new java.awt.Dimension(p_minimum, height));
+        p_label.setMaximumSize(new java.awt.Dimension(p_preferred, height));
     }
 
     final javax.swing.JLabel status_message;
