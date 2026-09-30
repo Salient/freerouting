@@ -76,13 +76,25 @@ public final class BoardScore implements Comparable<BoardScore>
      * count actually tracks what looks good. So for now this is purely a reported diagnostic.
      */
     public final int corner_count;
+    /**
+     * Of {@link #incomplete_count}, how many are connections
+     * {@code AutorouteEngine.AutorouteResult.BLOCKED} proved unroutable rather than merely not
+     * yet found. REPORTED ONLY, like {@link #corner_count}: it is a subset of incomplete_count,
+     * not an additional quantity, so it takes no part in {@link #compareTo} -- counting it there
+     * too would double-weight the same incompletes. Defaults to 0 via the three-arg overloads
+     * below for callers that were written before this field existed and have no such count to
+     * give.
+     */
+    public final int blocked_count;
 
-    private BoardScore(int p_incomplete_count, int p_via_count, double p_weighted_trace_length, int p_corner_count)
+    private BoardScore(int p_incomplete_count, int p_via_count, double p_weighted_trace_length, int p_corner_count,
+            int p_blocked_count)
     {
         this.incomplete_count = p_incomplete_count;
         this.via_count = p_via_count;
         this.weighted_trace_length = p_weighted_trace_length;
         this.corner_count = p_corner_count;
+        this.blocked_count = p_blocked_count;
     }
 
     /**
@@ -93,7 +105,14 @@ public final class BoardScore implements Comparable<BoardScore>
      */
     public static BoardScore of(int p_incomplete_count, int p_via_count, double p_weighted_trace_length, int p_corner_count)
     {
-        return new BoardScore(p_incomplete_count, p_via_count, p_weighted_trace_length, p_corner_count);
+        return new BoardScore(p_incomplete_count, p_via_count, p_weighted_trace_length, p_corner_count, 0);
+    }
+
+    /** As above, additionally reporting how many of p_incomplete_count are provably BLOCKED. */
+    public static BoardScore of(int p_incomplete_count, int p_via_count, double p_weighted_trace_length, int p_corner_count,
+            int p_blocked_count)
+    {
+        return new BoardScore(p_incomplete_count, p_via_count, p_weighted_trace_length, p_corner_count, p_blocked_count);
     }
 
     /**
@@ -105,10 +124,16 @@ public final class BoardScore implements Comparable<BoardScore>
      */
     public static BoardScore of(RoutingBoard p_board, int p_incomplete_count)
     {
+        return of(p_board, p_incomplete_count, 0);
+    }
+
+    /** As above, additionally reporting how many of p_incomplete_count are provably BLOCKED. */
+    public static BoardScore of(RoutingBoard p_board, int p_incomplete_count, int p_blocked_count)
+    {
         int via_count = p_board.get_vias().size();
         double weighted_trace_length = calc_weighted_trace_length(p_board);
         int corner_count = calc_corner_count(p_board);
-        return new BoardScore(p_incomplete_count, via_count, weighted_trace_length, corner_count);
+        return new BoardScore(p_incomplete_count, via_count, weighted_trace_length, corner_count, p_blocked_count);
     }
 
     /**
@@ -200,7 +225,10 @@ public final class BoardScore implements Comparable<BoardScore>
     @Override
     public String toString()
     {
-        return "incomplete=" + incomplete_count
+        String blocked_suffix = blocked_count > 0
+                ? " (" + blocked_count + " of which are provably unroutable, not just unfound)"
+                : "";
+        return "incomplete=" + incomplete_count + blocked_suffix
                 + ", vias=" + via_count
                 + ", weighted_trace_length=" + Math.round(weighted_trace_length)
                 + ", corners=" + corner_count + " (reported only, unscored)";
