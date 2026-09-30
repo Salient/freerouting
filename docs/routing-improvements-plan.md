@@ -138,7 +138,55 @@ So the work is not to build this, it is to:
 - Report before/after via counts (`BatchOptRoute.java:64` already logs them at
   WARN — promote to the report).
 
-## 4. Inner-layer preference — the hook is already wired
+## 4. Inner-layer preference — implemented, and MEASURED AS INEFFECTIVE
+
+**Read this before tuning `-il`.** The feature is implemented and the dead
+`add_via_costs` hook is now written, but measured on the real 6-layer reference
+board it does not move routing to inner layers, and at high settings it loses
+connections. Two runs, `-rm reroute -mt 150`, identical except for `-il`:
+
+| | `-il 0` | `-il 80` |
+|---|---|---|
+| incomplete | **12** | **15** |
+| vias | 1014 | 1017 |
+| weighted length | 55802423698 | 55766915499 |
+| corners | 11225 | 11344 |
+| **outer-layer length** | **37.38%** | **37.16%** |
+
+At `-il 80` the outer-layer trace costs were raised 8.2× (layer 0 from 2.20/3.30
+to 18.04/27.06) and a via-landing penalty of 176000 was applied to the outer
+layers — confirmed in the run log, so the weights really were written. The result
+was a **0.22 percentage point** shift in routed length off the outer layers,
+while incompletes rose from 12 to 15. By the §0 objective that is strictly worse:
+incompletes dominate.
+
+Per-layer length at `-il 0`: MidLayer3 29.97%, MidLayer2 29.45%, TopLayer 20.44%,
+BottomLayer 16.94%, MidLayer4 2.91%, MidLayer1 0.29%.
+
+**Why, and it is not a bug in the implementation.** The board is *already* 62.6%
+inner-routed at the default, because the default per-layer trace costs already
+penalise the outer layers (layer 0 at 2.20/3.30 and layer 5 at 3.10/2.20, against
+1.00–2.10 on the inner layers). The remaining ~37% is largely **structural rather
+than chosen**: pads live on outer layers, so escapes and approaches must start and
+end there regardless of cost. Raising the price of something the router has no
+alternative to does not change where it goes — it only distorts the search enough
+to fail a few connections.
+
+Note also that wire *count* is a misleading proxy here and was rejected: by count
+the outer share looks like 81%, because a pad-escape stub counts the same as a
+long haul. Length is the honest measure.
+
+**Recommendation:** leave `-il` at 0. It is verified to be an exact no-op there.
+Do not invest in tuning the constants
+(`OUTER_TRACE_COST_BOOST_AT_MAX` and friends) without first establishing that
+there is discretionary outer-layer routing to recover — on this board there is
+very little. If inner-layer bias is genuinely wanted, the lever with headroom is
+probably *placement* and pad-escape strategy, not the routing cost model.
+
+Retained because the plumbing is correct, it is inert at the default, and the
+measurement is the point: it stops this being re-litigated from first principles.
+
+### Original analysis, for reference — the hook was already wired
 
 The best find in this review. `AutorouteControl.add_via_costs[from].to_layer[to]`
 is a per-layer-pair via cost. It is allocated, **explicitly zeroed** at
