@@ -87,6 +87,9 @@ public class MainApplication extends javax.swing.JFrame
             if (design_file == null)
             {
                 FRLogger.warn(resources.getString("message_6") + " " +  startupOptions.design_input_filename + " " + resources.getString("message_7"));
+                // An unreadable/missing -de file used to fall through to a plain return,
+                // which exits 0 -- indistinguishable from success to a scripted caller.
+                System.exit(1);
                 return;
             }
             String message = resources.getString("loading_design") + " "
@@ -195,10 +198,17 @@ public class MainApplication extends javax.swing.JFrame
 
                                 Runtime.getRuntime().exit(0);
                             } catch (Exception e) {
+                                // Previously fell through with the GUI still open and no exit
+                                // call at all -- a batch caller waiting on this process would
+                                // hang forever instead of seeing a failure.
                                 FRLogger.error("Couldn't export board to file", e);
+                                Runtime.getRuntime().exit(1);
                             }
                         } else {
+                            // Same hang hazard as above: an unsupported -do extension (or a
+                            // null filename) used to just warn and leave the GUI running.
                             FRLogger.warn("Couldn't export board to '" + filename + "'.");
+                            Runtime.getRuntime().exit(1);
                         }
                     }
                 });
