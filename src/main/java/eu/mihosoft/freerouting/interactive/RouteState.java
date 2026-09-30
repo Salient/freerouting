@@ -333,6 +333,12 @@ public class RouteState extends InteractiveState
         boolean route_completed = route.next_corner(p_location);
         String layer_string = hdlg.get_routing_board().layer_structure.arr[route.nearest_target_layer()].name;
         hdlg.screen_messages.set_target_layer(layer_string);
+        // Report what blocked this attempt, if anything: next_corner() resets the failing
+        // obstacle at the start of every call, so this is null again as soon as a shove
+        // succeeds. Complements the visual hilight_shove_failing_obstacle drawing (Route.draw())
+        // with the obstacle's net and item type, for when the highlight alone does not say
+        // enough about why nothing is advancing.
+        hdlg.screen_messages.set_shove_obstacle(route.get_shove_failing_obstacle_description());
         if (this.activityReplayFile != null)
         {
             this.activityReplayFile.add_corner(p_location);
@@ -390,6 +396,7 @@ public class RouteState extends InteractiveState
             activityReplayFile.start_scope(ActivityReplayFileScope.CANCEL_SCOPE);
         }
         hdlg.screen_messages.clear();
+        hdlg.screen_messages.set_shove_obstacle(null);
         for (int curr_net_no : this.route.net_no_arr)
         {
             hdlg.update_ratsnest(curr_net_no);
@@ -481,7 +488,16 @@ public class RouteState extends InteractiveState
                 if (shove_failing_layer >= 0)
                 {
                     String layer_name = hdlg.get_routing_board().layer_structure.arr[hdlg.get_routing_board().get_shove_failing_layer()].name;
-                    hdlg.screen_messages.set_status_message(resources.getString("layer_not_changed_because_of_obstacle_on_layer") + " " + layer_name);
+                    String status_message = resources.getString("layer_not_changed_because_of_obstacle_on_layer") + " " + layer_name;
+                    // Same obstacle the visual hilight would show; append it here too since a
+                    // failed via placement does not otherwise get the net_field readout that
+                    // add_corner() gives ordinary trace shoving.
+                    String obstacle_description = this.route.get_shove_failing_obstacle_description();
+                    if (obstacle_description != null)
+                    {
+                        status_message += " (" + obstacle_description + ")";
+                    }
+                    hdlg.screen_messages.set_status_message(status_message);
                 }
                 else
                 {

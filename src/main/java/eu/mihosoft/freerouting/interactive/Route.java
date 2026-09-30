@@ -819,6 +819,64 @@ public class Route
     }
 
     /**
+     * The item that most recently blocked a shove attempt, or null if the last attempt did not
+     * fail on a specific obstacle (for example because it succeeded, or because nothing has been
+     * attempted yet). This is the same item draw() hilights in the violations colour when
+     * hilight_shove_failing_obstacle is set; get_shove_failing_obstacle_description() renders it
+     * as text for the status line.
+     */
+    public Item get_shove_failing_obstacle()
+    {
+        return this.shove_failing_obstacle;
+    }
+
+    /**
+     * A short, human-readable description of get_shove_failing_obstacle(), e.g. "GND (via)" or
+     * "U3-14 (pin)", or null if there is no failing obstacle to report. Used to explain what is
+     * blocking push/shove routing on the status line, alongside the existing visual hilight.
+     */
+    public String get_shove_failing_obstacle_description()
+    {
+        Item obstacle = this.shove_failing_obstacle;
+        if (obstacle == null)
+        {
+            return null;
+        }
+        String type_name;
+        if (obstacle instanceof eu.mihosoft.freerouting.board.Via)
+        {
+            type_name = "via";
+        }
+        else if (obstacle instanceof eu.mihosoft.freerouting.board.Pin)
+        {
+            type_name = "pin";
+        }
+        else if (obstacle instanceof PolylineTrace)
+        {
+            type_name = "trace";
+        }
+        else if (obstacle instanceof ConductionArea)
+        {
+            type_name = "conduction area";
+        }
+        else if (obstacle instanceof eu.mihosoft.freerouting.board.BoardOutline)
+        {
+            type_name = "board outline";
+        }
+        else
+        {
+            type_name = obstacle.getClass().getSimpleName();
+        }
+        if (obstacle.net_count() > 0)
+        {
+            Net obstacle_net = board.rules.nets.get(obstacle.get_net_no(0));
+            String net_name = obstacle_net != null ? obstacle_net.name : "?";
+            return net_name + " (" + type_name + ")";
+        }
+        return "(" + type_name + ")";
+    }
+
+    /**
      * If the routed starts at a pin and the route failed with the normal trace width,
      * another try with the smalllest pin width is done.
      * Returns the ok_point of the try, which is this.prev_point, if the try failed.

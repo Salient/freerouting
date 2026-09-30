@@ -80,7 +80,11 @@ public class MakeSpaceState extends DragState
             something_dragged = true;
         }
         route.next_corner(p_to_location);
-        
+        // Same status-line readout as RouteState.add_corner, for the same reason: dragging
+        // something aside is push/shove routing too, and can stall on the same kind of
+        // unshovable obstacle.
+        hdlg.screen_messages.set_shove_obstacle(route.get_shove_failing_obstacle_description());
+
         Point route_end = route.get_last_corner();
         if (hdlg.get_routing_board().rules.get_trace_angle_restriction() == AngleRestriction.NONE &&
                 !route_end.equals(p_to_location.round()))
@@ -106,6 +110,7 @@ public class MakeSpaceState extends DragState
         {
             activityReplayFile.start_scope(ActivityReplayFileScope.COMPLETE_SCOPE);
         }
+        hdlg.screen_messages.set_shove_obstacle(null);
         hdlg.show_ratsnest();
         return this.return_state;
     }

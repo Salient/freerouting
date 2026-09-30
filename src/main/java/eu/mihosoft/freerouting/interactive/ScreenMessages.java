@@ -104,6 +104,28 @@ public class ScreenMessages
     }
 
     /**
+     * Reports the item currently blocking a push/shove attempt during interactive routing (see
+     * eu.mihosoft.freerouting.interactive.Route.get_shove_failing_obstacle_description()), or
+     * clears the field when p_text is null.
+     *
+     * <p>Shares its field with set_net_under_cursor(): BoardHandling.mouse_moved() always calls
+     * that one first, then dispatches to the interactive state, which is what eventually calls
+     * this one (via RouteState.add_corner / MakeSpaceState.move_to) while a route is in
+     * progress. So during active routing this is always the second, and therefore winning,
+     * write to the field within the same mouse event -- there is no field left unclaimed to add
+     * without either shrinking the message line (see the class doc on BoardPanelStatus) or
+     * showing two things at once.
+     *
+     * <p>Not write-protect aware, for the same reason as set_net_under_cursor() and
+     * set_pass_number(): a shove failure is exactly the situation where the UI looks stuck, so
+     * this needs to keep working even if something else has write-protected the status line.
+     */
+    public void set_shove_obstacle(String p_text)
+    {
+        set_net_under_cursor(p_text);
+    }
+
+    /**
      * Sets the message in the status field.
      */
     public void set_status_message(String p_message)

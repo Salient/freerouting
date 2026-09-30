@@ -32,6 +32,10 @@ import static org.junit.Assert.assertTrue;
  * accumulated union of every failed attempt since the last success, not just the current one --
  * this is most of what made the interactive stall feel intermittent and unbounded.
  *
+ * <p>Also covers the companion status-line addition (Route.get_shove_failing_obstacle_description(),
+ * wired up in RouteState.add_corner): the same failed shove that would have leaked changed_area
+ * should also produce a human-readable explanation of what blocked it.
+ *
  * <p>These tests drive eu.mihosoft.freerouting.interactive.Route directly (it only needs a
  * RoutingBoard, not a live GUI) against a real board loaded headlessly via
  * eu.mihosoft.freerouting.interactive.BoardHandlingImpl, which exists exactly for this purpose.
@@ -145,5 +149,36 @@ public class RouteChangedAreaLeakTest
                             + "with this one",
                     board.get_changed_area_extent());
         }
+    }
+
+    /**
+     * Coverage for the status-line addition: RouteState.add_corner reports
+     * Route.get_shove_failing_obstacle_description() on every mouse-move event, so that the user
+     * gets a text explanation of why nothing is advancing to go with the existing visual
+     * hilight_shove_failing_obstacle drawing.
+     */
+    @Test
+    public void failed_shove_reports_the_blocking_pin_and_its_net() throws Exception
+    {
+        RoutingBoard board = load_test_board();
+        PinPair pins = find_two_pins_on_different_nets_sharing_a_layer(board);
+        assertTrue("could not find two pins on different nets sharing a signal layer in "
+                + TEST_BOARD, pins != null);
+
+        Route route = start_route_at(board, pins.start, pins.layer, true);
+
+        // Before the first attempt, there is nothing to report yet.
+        assertNull(route.get_shove_failing_obstacle_description());
+
+        boolean route_completed = route.next_corner(pins.target.get_center().to_float());
+        assertFalse(route_completed);
+
+        String description = route.get_shove_failing_obstacle_description();
+        assertTrue("expected a description of the blocking pin, got: " + description,
+                description != null && description.contains("(pin)"));
+        String target_net_name = board.rules.nets.get(pins.target.get_net_no(0)).name;
+        assertTrue("expected the blocked-by description to name the obstacle's net (" + target_net_name
+                        + "), got: " + description,
+                description.contains(target_net_name));
     }
 }
