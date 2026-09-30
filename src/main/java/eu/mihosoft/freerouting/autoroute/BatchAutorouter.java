@@ -368,8 +368,17 @@ public class BatchAutorouter
             }
 
             calc_airline(route_start_set, route_dest_set);
-            double max_milliseconds = 100000 * Math.pow(2, p_ripup_pass_no - 1);
-            max_milliseconds = Math.min(max_milliseconds, Integer.MAX_VALUE);
+            // Per-connection wall-clock budget, doubling with the ripup pass number.
+            //
+            // The first pass used to get 100 SECONDS per connection, doubling from there and
+            // capped only at Integer.MAX_VALUE - so a single unroutable connection stalled
+            // pass 1 for a minute and a half, and got worse every pass. That is the wrong
+            // shape: the early passes have the least ripup freedom and so the least chance of
+            // rescuing a hard connection, which makes them exactly the passes that should give
+            // up quickest. A connection abandoned early is retried in the next pass with more
+            // freedom anyway, so the work is deferred rather than lost.
+            double max_milliseconds = FIRST_PASS_TIME_LIMIT * Math.pow(2, p_ripup_pass_no - 1);
+            max_milliseconds = Math.min(max_milliseconds, MAX_CONNECTION_TIME_LIMIT);
             TimeLimit time_limit = new TimeLimit((int) max_milliseconds);
             AutorouteEngine autoroute_engine = routing_board.init_autoroute(p_route_net_no,
                     autoroute_control.trace_clearance_class_no, this.thread, time_limit, this.retain_autoroute_database);
@@ -468,6 +477,15 @@ public class BatchAutorouter
     {
         return this.last_main_pass_no;
     }
+
+    /**
+     * Wall-clock budget for one connection in ripup pass 1, in milliseconds. Doubles per
+     * pass up to MAX_CONNECTION_TIME_LIMIT.
+     */
+    private static final int FIRST_PASS_TIME_LIMIT = 8000;
+
+    /** Ceiling on the per-connection budget, however many passes have run. */
+    private static final int MAX_CONNECTION_TIME_LIMIT = 120000;
 
     private final int start_ripup_costs;
     /** Used to draw the airline of the current routed incomplete. */
