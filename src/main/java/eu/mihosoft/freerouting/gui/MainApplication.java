@@ -449,6 +449,7 @@ public class MainApplication extends javax.swing.JFrame
         // This is the batch path (-de): never block on a dialog, since a scripted or CI run
         // has nobody to answer it.
         eu.mihosoft.freerouting.interactive.BoardHandling.prompt_for_altium_constraints = false;
+        batch_mode = true;
         if (p_options.altium_constraints_filename != null)
         {
             eu.mihosoft.freerouting.interactive.BoardHandling.altium_constraints_file =
@@ -662,7 +663,23 @@ public class MainApplication extends javax.swing.JFrame
             if (p_design_rules_file == null) {
                 parent_folder_name = p_design_file.get_parent();
                 rules_file_name = design_name + ".rules";
-                confirm_import_rules_message = resources.getString("confirm_import_rules");
+                // A batch run has nobody to answer this, and read_rules_file treats a null
+                // message as "go ahead", so leaving it null imports the stored rules exactly
+                // as clicking Yes would. Prompting here did not make a batch run slow, it
+                // made it HANG FOREVER: the dialog waits on the event thread before the
+                // autorouter has started, so -mt never fires (its timer only stops the
+                // autorouter thread) and the process writes no output at all. Under a virtual
+                // display there is not even anyone who could click it.
+                if (batch_mode)
+                {
+                    FRLogger.info("Importing stored rules from '" + rules_file_name
+                            + "' without prompting, because this is a batch run."
+                            + " Pass -dr to use a different rules file.");
+                }
+                else
+                {
+                    confirm_import_rules_message = resources.getString("confirm_import_rules");
+                }
             } else {
                 rules_file_name = p_design_rules_file;
             }
@@ -674,6 +691,12 @@ public class MainApplication extends javax.swing.JFrame
         }
         return new_frame;
     }
+    /**
+     * True once a batch run (-de) has been recognised, so nothing on the open path may
+     * block on a modal dialog. See apply_rule_and_mode_options and create_board_frame.
+     */
+    private static boolean batch_mode = false;
+
     private final java.util.ResourceBundle resources;
     private final javax.swing.JButton demonstration_button;
     private final javax.swing.JButton sample_board_button;
