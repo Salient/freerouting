@@ -1454,27 +1454,43 @@ public class FrpcbFile
      */
     private static IntPoint[] extend_into_pads(IntPoint[] p_corners, IntPoint p_start_center, IntPoint p_end_center)
     {
-        int extra = (p_start_center == null ? 0 : 1) + (p_end_center == null ? 0 : 1);
+        IntPoint start_center = p_start_center;
+        IntPoint end_center = p_end_center;
+        // Both ends inside the SAME pad happens a lot - 4312 wires on the reference board are
+        // short links buried in one pad. Adding that one centre at both ends closes the wire
+        // into a loop, and on a wire short enough to lie entirely within the pad it collapses to
+        // a single point. Both then reach Altium as junk: it drew the degenerate ones as stray
+        // netless traces running off the board. Extend one end only in that case.
+        if (start_center != null && start_center.equals(end_center))
+        {
+            end_center = null;
+        }
+        int extra = (start_center == null ? 0 : 1) + (end_center == null ? 0 : 1);
         if (extra == 0)
         {
             return p_corners;
         }
         IntPoint[] result = new IntPoint[p_corners.length + extra];
         int at = 0;
-        if (p_start_center != null)
+        if (start_center != null)
         {
-            result[at++] = p_start_center;
-            ++snapped_wire_ends;
+            result[at++] = start_center;
         }
         for (IntPoint corner : p_corners)
         {
             result[at++] = corner;
         }
-        if (p_end_center != null)
+        if (end_center != null)
         {
-            result[at++] = p_end_center;
-            ++snapped_wire_ends;
+            result[at++] = end_center;
         }
+        // Never hand back something that is closed or degenerate, whatever the geometry was.
+        java.util.LinkedHashSet<IntPoint> distinct = new java.util.LinkedHashSet<>(java.util.Arrays.asList(result));
+        if (distinct.size() < 2 || result[0].equals(result[result.length - 1]))
+        {
+            return p_corners;
+        }
+        snapped_wire_ends += extra;
         return result;
     }
 

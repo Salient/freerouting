@@ -341,6 +341,9 @@ public class SessionFile
         return "MidLayer" + p_layer_no;
     }
 
+    /** Wires refused by write_wire_scope for having no extent; reported once per file. */
+    private static int degenerate_wires_skipped = 0;
+
     private static void write_routes(BasicBoard p_board, IdentifierType p_identifier_type, CoordinateTransform p_coordinate_transform,
             IndentFileWriter p_file) throws java.io.IOException
     {
@@ -349,7 +352,13 @@ public class SessionFile
         Resolution.write_scope(p_file, p_board.communication);
         Parser.write_scope(p_file,p_board.communication.specctra_parser_info, p_identifier_type, true);
         write_library(p_board, p_identifier_type, p_coordinate_transform, p_file);
+        degenerate_wires_skipped = 0;
         write_network(p_board, p_identifier_type, p_coordinate_transform, p_file);
+        if (degenerate_wires_skipped > 0)
+        {
+            FRLogger.info("Left out " + degenerate_wires_skipped
+                    + " trace(s) that had collapsed to a single point");
+        }
         p_file.end_scope();
     }
     
@@ -552,6 +561,7 @@ public class SessionFile
         eu.mihosoft.freerouting.board.Layer board_layer = p_board.layer_structure.arr[layer_no];
         int wire_width = (int) Math.round(p_coordinate_transform.board_to_dsn(2 * p_wire.get_half_width()));
         Point[] corner_arr = p_wire.polyline().corner_arr();
+
         int [] coors = new int [2 * corner_arr.length];
         int corner_index = 0;
         int [] prev_coors = null;
@@ -579,6 +589,18 @@ public class SessionFile
                 adjusted_coors[i] = coors[i];
             }
             coors = adjusted_coors;
+        }
+
+        // Never write a wire with no extent, judged on the coordinates actually written. The
+        // loop above drops consecutive duplicates, so a trace whose corners ROUND to the same
+        // output coordinate collapses to a single point here even though its board-unit corners
+        // differ - which is why checking corner_arr instead missed all ten of them. Altium
+        // imported those as stray net-less traces running off the board. A point of copper is
+        // nothing to lose, and this catches every way the board can produce one.
+        if (coors.length < 4)
+        {
+            ++degenerate_wires_skipped;
+            return;
         }
         // Emit the whole wire on ONE line. Altium's Specctra route importer cannot parse
         // a wire whose (path ...) coordinates are split across multiple lines - it silently
