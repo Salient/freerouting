@@ -41,6 +41,14 @@ public class BatchAutorouter
     private HashSet<String> already_checked_board_hashes = new HashSet<String>();
 
     /**
+     * Tracks which (item, net) connections AutorouteEngine.autoroute_connection has proven
+     * BLOCKED, so autoroute_item can skip them on every remaining pass, plus (for visibility
+     * only) how many times each connection has merely come back NOT_ROUTED. See
+     * BlockedConnectionRegistry's class javadoc for why those two are kept separate.
+     */
+    private final BlockedConnectionRegistry blocked_registry = new BlockedConnectionRegistry();
+
+    /**
      *  Autoroutes ripup passes until the board is completed or the autorouter is stopped by the user,
      *  or if p_max_pass_count is exceeded. Is currently used in the optimize via batch pass.
      *  Returns the number of passes to complete the board or p_max_pass_count + 1,
@@ -313,6 +321,13 @@ public class BatchAutorouter
 
     private boolean autoroute_item(Item p_item, int p_route_net_no, SortedSet<Item> p_ripped_item_list, int p_ripup_pass_no)
     {
+        ConnectionKey connection_key = new ConnectionKey(p_route_net_no, p_item.get_id_no());
+        if (this.blocked_registry.is_blocked(connection_key))
+        {
+            // Already proven unroutable on an earlier pass: do not re-run the reachability
+            // check or pay the maze search's time budget again.
+            return false;
+        }
         try
         {
             boolean contains_plane = false;
@@ -388,6 +403,14 @@ public class BatchAutorouter
             {
                 routing_board.opt_changed_area(new int[0], null, this.hdlg.get_settings().get_trace_pull_tight_accuracy(), autoroute_control.trace_costs, this.thread, TIME_LIMIT_TO_PREVENT_ENDLESS_LOOP);
             }
+            else if (autoroute_result == AutorouteEngine.AutorouteResult.BLOCKED)
+            {
+                note_blocked_connection(connection_key, p_item, p_route_net_no);
+            }
+            else if (autoroute_result == AutorouteEngine.AutorouteResult.NOT_ROUTED)
+            {
+                this.blocked_registry.record_not_routed(connection_key);
+            }
             // eu.mihosoft.freerouting.tests.Validate.check("Autoroute  ", hdlg.get_routing_board());
             boolean result = autoroute_result == AutorouteEngine.AutorouteResult.ROUTED || autoroute_result == AutorouteEngine.AutorouteResult.ALREADY_CONNECTED;
             return result;
@@ -403,6 +426,75 @@ public class BatchAutorouter
                     + " on " + net_description + " in ripup pass " + p_ripup_pass_no, e);
             return false;
         }
+    }
+
+    /**
+     * Records a newly-discovered BLOCKED connection and logs it once, with the net name (not
+     * just its number) and enough context to find the item in Altium, per the user's request to
+     * surface identified-impossible routes in the log. blocked_registry.is_blocked is checked at
+     * the top of autoroute_item before this can be reached again for the same connection, and
+     * mark_blocked itself reports whether this is the first time -- belt and suspenders against
+     * double-logging the same connection on a later pass.
+     */
+    private void note_blocked_connection(ConnectionKey p_key, Item p_item, int p_route_net_no)
+    {
+        if (!this.blocked_registry.mark_blocked(p_key))
+        {
+            return;
+        }
+        eu.mihosoft.freerouting.rules.Net route_net = routing_board.rules.nets.get(p_route_net_no);
+        String net_name = route_net == null ? ("<unnamed net " + p_route_net_no + ">") : route_net.name;
+        FRLogger.warn("BatchAutorouter: connection provably unroutable on net '" + net_name
+                + "' at " + describe_item(p_item) + " -- no free space found around any"
+                + " destination item on any layer of the current board. Ripup cannot change a"
+                + " purely geometric fact like this, so it will be skipped on all remaining"
+                + " passes instead of re-attempted.");
+    }
+
+    /**
+     * A human-readable identification of p_item for the log message above: component and pin
+     * name when it is a Pin (e.g. "pin U3-14"), otherwise its component name if it belongs to
+     * one, falling back to just its item id. Always includes the item id too, since that is
+     * what ConnectionKey and the rest of this registry key off internally.
+     */
+    private static String describe_item(Item p_item)
+    {
+        if (p_item instanceof eu.mihosoft.freerouting.board.Pin)
+        {
+            eu.mihosoft.freerouting.board.Pin curr_pin = (eu.mihosoft.freerouting.board.Pin) p_item;
+            String component_name = curr_pin.component_name();
+            String pin_name = curr_pin.name();
+            if (component_name != null && pin_name != null)
+            {
+                return "pin " + component_name + "-" + pin_name + " (item id " + p_item.get_id_no() + ")";
+            }
+        }
+        String component_name = p_item.component_name();
+        if (component_name != null)
+        {
+            return p_item.getClass().getSimpleName() + " of " + component_name + " (item id " + p_item.get_id_no() + ")";
+        }
+        return p_item.getClass().getSimpleName() + " (item id " + p_item.get_id_no() + ")";
+    }
+
+    /**
+     * Number of connections proven unroutable (AutorouteEngine.AutorouteResult.BLOCKED) so far
+     * in this batch run. Used for the end-of-run log and GUI summary.
+     */
+    public int get_blocked_connection_count()
+    {
+        return this.blocked_registry.blocked_count();
+    }
+
+    /**
+     * Number of distinct connections that have come back NOT_ROUTED at least p_min_failures
+     * times so far in this run. Reporting only -- see BlockedConnectionRegistry's javadoc for
+     * why this is NOT proof of impossibility and does not feed any give-up rule; it is exposed
+     * purely so a human can see which connections are struggling across passes.
+     */
+    public int get_repeatedly_failed_connection_count(int p_min_failures)
+    {
+        return this.blocked_registry.repeatedly_failed_count(p_min_failures);
     }
 
     /**
