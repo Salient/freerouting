@@ -192,6 +192,13 @@ public class Route
         {
             // database may be damaged, restore previous situation
             board.undo(null);
+            // undo() already restored the geometry that start_marking_changed_area() /
+            // insert_forced_trace_segment() marked as changed while this attempt was under way,
+            // so there is nothing left to optimize. Discard the marking instead of leaving it
+            // set: start_marking_changed_area() is a no-op while changed_area != null, so a
+            // leaked marking here would silently be inherited -- and unioned with -- whatever
+            // the next mouse-move event marks, even if that is somewhere else on the board.
+            board.clear_changed_area();
             // end routing in case it is dynamic
             return (!is_stitch_mode);
         }
@@ -199,6 +206,28 @@ public class Route
         if (ok_point == prev_corner)
         {
             set_shove_failing_obstacle(board.get_shove_failing_obstacle());
+            // Unlike the ok_point == null case above, this attempt was NOT rolled back: a
+            // partially successful shove can leave other items (traces, vias) genuinely moved
+            // aside even though the segment being routed was ultimately rejected -- see
+            // RoutingBoard.insert_forced_trace_polyline, which only returns null (triggering an
+            // undo) on a check/insert inconsistency, not on an ordinary shove failure like this
+            // one. So flush and pull-tight whatever this attempt actually marked as changed now,
+            // scoped to this single failed attempt, instead of leaving it pending: the next
+            // start_marking_changed_area() call is a no-op while changed_area != null, so a
+            // leftover marking here would otherwise be silently unioned with the (spatially
+            // unrelated) marking of every subsequent mouse-move event until one finally succeeds
+            // -- at which point pull-tight would have to process the accumulated union of every
+            // failed attempt since the last success, not just the current one. That accumulation,
+            // not any single shove, is most of what makes the stall feel intermittent and
+            // unbounded.
+            long pull_tight_pass2_t0 = System.nanoTime();
+            board.opt_changed_area(opt_net_no_arr(), null, pull_tight_accuracy, null, null, pull_tight_time_limit);
+            if (FRLogger.isTraceEnabled())
+            {
+                FRLogger.trace(String.format(
+                        "Route.next_corner: failed shove flushed changed_area in %.1fms",
+                        (System.nanoTime() - pull_tight_pass2_t0) / 1e6));
+            }
             return false;
         }
         this.prev_corner = ok_point;
@@ -222,15 +251,6 @@ public class Route
         {
             tidy_clip_shape = ok_point.surrounding_octagon().enlarge(trace_tidy_width);
         }
-        int[] opt_net_no_arr;
-        if (max_shove_trace_recursion_depth <= 0)
-        {
-            opt_net_no_arr = net_no_arr;
-        }
-        else
-        {
-            opt_net_no_arr = new int[0];
-        }
         if (route_completed)
         {
             this.board.reduce_nets_of_route_items();
@@ -243,9 +263,31 @@ public class Route
         {
             calc_nearest_target_point(this.prev_corner.to_float());
         }
-        board.opt_changed_area(opt_net_no_arr, tidy_clip_shape, pull_tight_accuracy,
+        long pull_tight_pass2_t0 = System.nanoTime();
+        board.opt_changed_area(opt_net_no_arr(), tidy_clip_shape, pull_tight_accuracy,
                 null, null, pull_tight_time_limit, ok_point, layer);
+        if (FRLogger.isTraceEnabled())
+        {
+            FRLogger.trace(String.format(
+                    "Route.next_corner: pull_tight_pass2=%.1fms",
+                    (System.nanoTime() - pull_tight_pass2_t0) / 1e6));
+        }
         return route_completed;
+    }
+
+    /**
+     * The net numbers to restrict pull-tight optimizing to after a shove attempt, matching the
+     * logic already used for the tidy width above: once trace shoving is enabled, other nets'
+     * traces may have been moved aside too, so pull-tight has to consider all nets in the marked
+     * region rather than just the net being routed.
+     */
+    private int[] opt_net_no_arr()
+    {
+        if (max_shove_trace_recursion_depth <= 0)
+        {
+            return net_no_arr;
+        }
+        return new int[0];
     }
 
     /**
@@ -304,6 +346,14 @@ public class Route
             }
             set_shove_failing_obstacle(board.get_shove_failing_obstacle());
             board.undo(null);
+            // Same leak as in next_corner's ok_point == null case: board.forced_via() marks a
+            // changed area (via RoutingBoard.start_marking_changed_area()) but only flushes it on
+            // success, and undo() does not reset the transient field. Since generate_snapshot()
+            // was taken immediately above, undo() has already fully reverted this attempt, so
+            // there is nothing left to optimize -- discard the marking rather than let it leak
+            // into the next via rule tried by this same loop, or into the very next mouse-move
+            // event if every via rule fails.
+            board.clear_changed_area();
         }
         if (via_found)
         {
