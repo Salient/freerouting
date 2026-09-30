@@ -115,6 +115,7 @@ public class AutorouteSettings implements java.io.Serializable
         set_stop_pass_no(p_settings.stop_pass_no);
         via_costs = p_settings.via_costs;
         plane_via_costs = p_settings.plane_via_costs;
+        inner_layer_preference = p_settings.inner_layer_preference;
         layer_active_arr = new boolean[p_settings.layer_active_arr.length];
         System.arraycopy(p_settings.layer_active_arr, 0, this.layer_active_arr, 0, layer_active_arr.length);
         preferred_direction_is_horizontal_arr = new boolean[p_settings.preferred_direction_is_horizontal_arr.length];
@@ -350,15 +351,70 @@ public class AutorouteSettings implements java.io.Serializable
         {
             result[i] = new ExpansionCostFactor(get_horizontal_trace_costs(i), get_vertical_trace_costs(i));
         }
+        // Inner-layer preference: bias the search away from the two outermost signal layers,
+        // so it uses them only as much as it must (mainly to reach the pads that live there).
+        // Only meaningful when there is a genuine inner layer to prefer instead -- on a 1- or
+        // 2-layer board every layer already is an outer layer, so this is skipped entirely
+        // rather than uselessly scaling every layer by the same factor. At preference 0 the
+        // factor is exactly 1.0, and the guard below skips the multiply altogether, so this is
+        // a true no-op: get_trace_cost_arr() returns bit-identical values to before this feature
+        // existed.
+        if (result.length >= 3 && inner_layer_preference > 0)
+        {
+            double factor = get_outer_layer_trace_cost_factor();
+            int last = result.length - 1;
+            result[0] = new ExpansionCostFactor(result[0].horizontal * factor, result[0].vertical * factor);
+            result[last] = new ExpansionCostFactor(result[last].horizontal * factor, result[last].vertical * factor);
+        }
         return result;
     }
-    
+
+    public void set_inner_layer_preference(int p_value)
+    {
+        inner_layer_preference = Math.max(0, Math.min(100, p_value));
+    }
+
+    /** 0 (today's default: no preference at all) to 100 (strongest preference for inner layers). */
+    public int get_inner_layer_preference()
+    {
+        return inner_layer_preference;
+    }
+
+    /**
+     * Multiplier applied to the trace cost of each of the two outermost signal layers.
+     * 1.0 (no effect) at preference 0, rising linearly to 1.0 + OUTER_TRACE_COST_BOOST_AT_MAX
+     * at preference 100.
+     */
+    public double get_outer_layer_trace_cost_factor()
+    {
+        return 1.0 + (inner_layer_preference / 100.0) * OUTER_TRACE_COST_BOOST_AT_MAX;
+    }
+
+    /**
+     * Multiplier of a net's own min_normal_via_cost (see AutorouteControl) that
+     * AutorouteControl adds as an extra cost for a via landing on one of the two outermost
+     * signal layers -- i.e. how expensive it is for a via to head back out to an outer layer.
+     * 0.0 (no effect) at preference 0, rising linearly to OUTER_VIA_COST_BOOST_AT_MAX at
+     * preference 100.
+     */
+    public double get_outer_via_cost_factor()
+    {
+        return (inner_layer_preference / 100.0) * OUTER_VIA_COST_BOOST_AT_MAX;
+    }
+
+    /** How much the outer-layer trace cost factor can grow by at preference 100 (see above). */
+    private static final double OUTER_TRACE_COST_BOOST_AT_MAX = 9.0;
+    /** How many multiples of min_normal_via_cost the outer via landing penalty can reach at preference 100. */
+    private static final double OUTER_VIA_COST_BOOST_AT_MAX = 4.0;
+
     private boolean with_fanout;
     private boolean with_autoroute;
     private boolean with_postroute;
     private boolean vias_allowed;
     private int via_costs;
     private int plane_via_costs;
+    /** 0-100; see get_outer_layer_trace_cost_factor / get_outer_via_cost_factor. Default 0 is a no-op. */
+    private int inner_layer_preference = 0;
     private int start_ripup_costs;
     private int start_pass_no;
     private int stop_pass_no;

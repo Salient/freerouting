@@ -37,6 +37,9 @@ Application options (see docs/frpcb-format.md)
   -mt SECONDS     Stop autorouting after this long, then write -do.
   -mp N           Maximum number of autorouter passes.
   -dr FILE        Design rules file.
+  -il N           Inner layer preference, 0-100. 0 (default) is a no-op; higher values bias
+                  the router away from the two outermost signal layers, balanced against the
+                  extra vias that costs. No effect on 1- or 2-layer boards.
 
 Run ./freerouting -de board.frpcb.json -rm verify -do report.txt before -rm
 finish: finish makes existing copper unfixable, so a violation already present

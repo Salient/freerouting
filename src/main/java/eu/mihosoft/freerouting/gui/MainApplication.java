@@ -117,6 +117,9 @@ public class MainApplication extends javax.swing.JFrame
                 return;
             }
 
+            // -il: 0 is AutorouteSettings' own default, so this is a no-op unless the flag was
+            // actually passed.
+            new_frame.board_panel.board_handling.settings.autoroute_settings.set_inner_layer_preference(startupOptions.inner_layer_preference);
             new_frame.board_panel.board_handling.settings.autoroute_settings.set_stop_pass_no(new_frame.board_panel.board_handling.settings.autoroute_settings.get_start_pass_no() + startupOptions.max_passes - 1);
             if (startupOptions.max_passes < 99999 || startupOptions.max_seconds > 0)
             {
