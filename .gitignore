@@ -19,4 +19,10 @@ bin/
 # Windows "mark of the web" metadata files created under WSL
 *:Zone.Identifier
 
+# Board exports/imports from the Altium <-> Specctra/freerouting round-trip
+# (target.dsn, target.rte, target.do, plus target.bst/target.sts from the
+# Altium exporter). These carry real part numbers, net names, and
+# machine-specific paths, so they must never be committed.
+/target.*
+
 
