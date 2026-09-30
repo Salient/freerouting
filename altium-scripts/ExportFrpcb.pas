@@ -579,12 +579,40 @@ End;
 
 Procedure WritePadShapeRot(LayerTag : String; XSize, YSize : TCoord; Shape : TShape; Rot : Double);
 Var
-    R, C, Sn, HX, HY : Double;
+    R, C, Sn, HX, HY, EffRot : Double;
     I : Integer;
     PxArr, PyArr : Array[0..3] Of Double;
     Pts : String;
     Orth : Boolean;
 Begin
+    // Is the rotation an exact multiple of 90 (within a small tolerance)?
+    //
+    // This is computed FIRST because every shape branch below needs it, not just the
+    // rectangle one. Callers in WritePadstacks pre-apply an orthogonal rotation by
+    // SWAPPING XSize/YSize (see PadSwapXY) and then pass the full rotation as well. So
+    // for an orthogonal pad the rotation has already been accounted for, and any branch
+    // that rotates geometry by Rot would apply it a SECOND time.
+    //
+    // That is exactly what happened to rounded and octagonal pads: they went to
+    // WriteRoundedPolygon with both the swapped sizes and Rot=90, came out transposed,
+    // and on a live board U104's fine-pitch stadium pads were emitted 16.142 x 62.992
+    // instead of 62.992 x 16.142 - rotated 90 degrees, so adjacent pads in the row
+    // overlapped each other. 74 of the 85 pad-on-pad collisions in the export came from
+    // that one padstack. Rectangles were unaffected only because their branch ignores
+    // Rot when Orth is true, which is the same correction now applied to the others.
+    R := Rot;
+    While R < 0 Do R := R + 360;
+    While R >= 90 Do R := R - 90;
+    Orth := (R < 0.5) Or (R > 89.5);
+
+    // Non-orthogonal pads are NOT pre-swapped (PadSwapXY returns False for them and
+    // PadRotKey makes the angle part of the padstack identity), so they still need the
+    // real rotation applied here.
+    If Orth Then
+        EffRot := 0
+    Else
+        EffRot := Rot;
+
     If Shape = eRounded Then
     Begin
         If XSize = YSize Then
@@ -596,7 +624,7 @@ Begin
         Else
         Begin
             { A stadium, not a circle. See WriteRoundedPolygon. }
-            WriteRoundedPolygon(LayerTag, XSize, YSize, Rot, False);
+            WriteRoundedPolygon(LayerTag, XSize, YSize, EffRot, False);
         End;
         Exit;
     End;
@@ -606,15 +634,9 @@ Begin
         { FRPCB has no octagon primitive, and ShapeName used to emit the word "octagon",
           which the importer rejects as an unknown shape - the pad then had no copper at
           all and its pin was dropped. }
-        WriteRoundedPolygon(LayerTag, XSize, YSize, Rot, True);
+        WriteRoundedPolygon(LayerTag, XSize, YSize, EffRot, True);
         Exit;
     End;
-
-    // Is the rotation an exact multiple of 90 (within a small tolerance)?
-    R := Rot;
-    While R < 0 Do R := R + 360;
-    While R >= 90 Do R := R - 90;
-    Orth := (R < 0.5) Or (R > 89.5);
 
     If Orth Then
     Begin
