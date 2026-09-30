@@ -11,9 +11,16 @@
 { REQUIRES a script project: this file must be added as Document1 in         }
 { ExportFrpcb.PrjScr (shipped alongside this file) - a bare .pas is          }
 { invisible in the Run Script dialog (confirmed live-Altium requirement,     }
-{ see reerouting/altium/VERIFICATION_STATUS.json). Open ExportFrpcb.PrjScr,  }
-{ then File > Run Script, select ExportFrpcb in the dialog. Writes           }
-{ <board-name>.frpcb.json next to the PCB document.                          }
+{ verified against a real board in a separate, unversioned sibling project - }
+{ not something this repo can point at directly, so it is stated here as a   }
+{ fact rather than a path). Open ExportFrpcb.PrjScr, then File > Run Script, }
+{ and select one of the two zero-argument entry points below:                }
+{   ExportFrpcb           - exports only, with its confirmation dialogs.     }
+{   RouteWithFreerouting  - exports, runs freerouting, and reports back      }
+{                           without blocking dialogs (see that procedure's   }
+{                           own header and docs/altium-freerouting-          }
+{                           automation.md for what is/isn't automated).      }
+{ Writes <board-name>.frpcb.json next to the PCB document.                    }
 {                                                                              }
 { Every non-trivial API call below (rule iteration, Scope1Expression/Gap,     }
 { net-class membership via IsMember, the FirstPCBObject-narrowing pattern,    }
@@ -1924,18 +1931,25 @@ Begin
 End;
 
 {..............................................................................}
-{ Entry point                                                                  }
+{ Entry points                                                                 }
+{                                                                              }
+{ DoExportFrpcb holds the actual export logic and is shared by both entry     }
+{ points below. Its two ShowMessage calls (missing board / done) are gated by }
+{ p_Quiet so that RouteWithFreerouting's unattended run never blocks on a     }
+{ dialog, while the manual ExportFrpcb entry point keeps behaving exactly as  }
+{ before - same messages, same wording, unconditional.                       }
 {..............................................................................}
 
-Procedure ExportFrpcb;
+Function DoExportFrpcb(p_Quiet : Boolean) : Boolean;
 Var
     Board       : IPCB_Board;
     OutFileName : TPCBString;
 Begin
+    Result := False;
     Board := PCBServer.GetCurrentPCBBoard;
     If Board = Nil Then
     Begin
-        ShowMessage('No PCB document is open.');
+        If Not p_Quiet Then ShowMessage('No PCB document is open.');
         Exit;
     End;
 
@@ -1966,14 +1980,193 @@ Begin
 
         OutFileName := ChangeFileExt(Board.FileName, '.frpcb.json');
         OutLines.SaveToFile(OutFileName);
-        ShowMessage('Wrote ' + OutFileName + #13#10 +
-            'Class-to-class clearances are NOT in this file - import it with' + #13#10 +
-            '-dc Constraints.xml, or leave Constraints.xml next to it.');
+        If Not p_Quiet Then
+            ShowMessage('Wrote ' + OutFileName + #13#10 +
+                'Class-to-class clearances are NOT in this file - import it with' + #13#10 +
+                '-dc Constraints.xml, or leave Constraints.xml next to it.');
+        Result := True;
     Finally
         OutlineRules.Free;
         DroppedRules.Free;
         NetRuleNets.Free;
         OutLines.Free;
     End;
+End;
+
+{ Manual entry point - unchanged behaviour: always shows its two dialogs. }
+Procedure ExportFrpcb;
+Begin
+    DoExportFrpcb(False);
+End;
+
+{..............................................................................}
+{ RouteWithFreerouting - the automated round trip.                            }
+{                                                                              }
+{ Exports quietly, launches freerouting on the result, waits for it to        }
+{ finish, and checks that a routed output file appeared. See                  }
+{ docs/altium-freerouting-automation.md for the full design writeup,          }
+{ including what is confirmed vs. assumed and why the import leg below is a   }
+{ manual instruction rather than a scripted call.                             }
+{                                                                              }
+{ LAUNCHING AND WAITING: Client.SendMessage's ResetParameters/                }
+{ AddStringParameter/RunProcess trio (the pattern usually cited for Altium    }
+{ scripting) dispatches Altium's OWN registered commands - the same          }
+{ mechanism behind menu items like PCB:Place - not arbitrary third-party      }
+{ executables, and no confirmed process id for "run an external program and   }
+{ wait" was found. Instead this uses CreateOleObject('WScript.Shell').Run,    }
+{ whose bWaitOnReturn parameter (True here) is Microsoft-documented to block  }
+{ until the child process exits and to return its real exit code. That is a  }
+{ standard Windows Script Host / OLE Automation capability, not an           }
+{ Altium-specific one - DelphiScript's CreateOleObject bridge is a            }
+{ long-established capability (the same one real Altium scripts use to       }
+{ drive Excel/Word/Outlook), but this exact call has NOT been exercised      }
+{ against a live Altium in this environment. If it turns out not to work,    }
+{ the fallback is to run FREEROUTING_LAUNCHER_DEFAULT by hand with the        }
+{ -de/-do arguments this procedure prints into its final message.            }
+{                                                                              }
+{ IMPORTING THE RESULT: no documented, scriptable Altium process id for       }
+{ "import a Specctra session/route file" could be confirmed (this is        }
+{ different from the export/RunProcess question above - it is Altium's OWN   }
+{ File > Import Wizard action, not a third-party program). That importer     }
+{ demonstrably exists and works - this project's own git history shows it    }
+{ being debugged against a live Altium session (CRLF requirement, one        }
+{ wire per line, degenerate-wire skip; see SessionFile.java's                }
+{ write_route_file/write_wire) - but every confirmed use of it found here    }
+{ was interactive. So the routed .rte is produced and verified to exist and  }
+{ be non-empty, then this procedure names the exact remaining manual step    }
+{ instead of guessing at a RunProcess id it cannot verify.                   }
+{..............................................................................}
+
+Const
+    { Full path to the Windows launcher (freerouting.cmd, repo root) on this
+      workstation. Edit this, or set the FREEROUTING_LAUNCHER environment
+      variable (which takes priority) - see freerouting.cmd's own header for
+      what it does with this path. }
+    FREEROUTING_LAUNCHER_DEFAULT = 'C:\freerouting\freerouting.cmd';
+    { Wall-clock autoroute cap in seconds, forwarded as freerouting's -mt.
+      0 means no cap - freerouting runs until it finishes or hits its own
+      pass limit. Raise this if RouteWithFreerouting returns before a large
+      board is fully routed. }
+    FREEROUTING_MAX_SECONDS = 0;
+
+Procedure RouteWithFreerouting;
+Var
+    Board        : IPCB_Board;
+    FrpcbPath    : TPCBString;
+    RtePath      : TPCBString;
+    LauncherPath : String;
+    FromEnv      : String;
+    CmdLine      : String;
+    WSHShell     : Variant;
+    ExitCode     : Integer;
+    RteLines     : TStringList;
+    RteLineCount : Integer;
+Begin
+    Board := PCBServer.GetCurrentPCBBoard;
+    If Board = Nil Then
+    Begin
+        ShowMessage('No PCB document is open.');
+        Exit;
+    End;
+
+    If Not DoExportFrpcb(True) Then
+    Begin
+        ShowMessage('Export to FRPCB JSON failed - open the Messages panel for details.');
+        Exit;
+    End;
+
+    FrpcbPath := ChangeFileExt(Board.FileName, '.frpcb.json');
+    RtePath   := ChangeFileExt(Board.FileName, '.rte');
+
+    // WScript.Shell.ExpandEnvironmentStrings, not a hypothetical
+    // GetEnvironmentVariable: this script already needs WScript.Shell for the
+    // Run call below, so reading the override through the same object avoids
+    // depending on a second, separately-unconfirmed API.
+    WSHShell := CreateOleObject('WScript.Shell');
+    FromEnv := WSHShell.ExpandEnvironmentStrings('%FREEROUTING_LAUNCHER%');
+    // ExpandEnvironmentStrings returns its input UNCHANGED when the variable
+    // is not set, so compare against the literal rather than trusting
+    // FileExists alone (which would treat "not set" the same as "set to a
+    // path that happens not to exist yet").
+    If FromEnv = '%FREEROUTING_LAUNCHER%' Then
+        LauncherPath := FREEROUTING_LAUNCHER_DEFAULT
+    Else
+        LauncherPath := FromEnv;
+
+    If Not FileExists(LauncherPath) Then
+    Begin
+        ShowMessage('Freerouting launcher not found at "' + LauncherPath + '".' + #13#10 +
+            'Edit FREEROUTING_LAUNCHER_DEFAULT near the top of this script, or set the ' +
+            'FREEROUTING_LAUNCHER environment variable to its full path, then try again.');
+        Exit;
+    End;
+
+    // Absolute, always-quoted paths for -de/-do: StartupOptions.java matches
+    // flags with startsWith and silently keeps the default for any value that
+    // begins with '-', with no error. A path starting with '-' is not
+    // realistic here, but -rm's value is a literal we control, so it is kept
+    // dash-free on principle. -dc is deliberately omitted: unlike a plain
+    // Specctra DSN export, this board's clearance matrix is already inside
+    // FrpcbPath (see WriteClearanceMatrix), so there is no separate
+    // Constraints.xml for -dc to point at.
+    CmdLine := '"' + LauncherPath + '" -de "' + FrpcbPath + '" -do "' + RtePath + '" -rm reroute';
+    If FREEROUTING_MAX_SECONDS > 0 Then
+        CmdLine := CmdLine + ' -mt ' + IntToStr(FREEROUTING_MAX_SECONDS);
+
+    Try
+        // 1 = normal, activated window - this run is meant to be watchable,
+        // not hidden. True = wait for exit and return its real exit code.
+        ExitCode := WSHShell.Run(CmdLine, 1, True);
+    Except
+        ShowMessage('Could not launch freerouting. Command line was:' + #13#10 + CmdLine);
+        Exit;
+    End;
+
+    If ExitCode <> 0 Then
+    Begin
+        ShowMessage('freerouting exited with code ' + IntToStr(ExitCode) +
+            ' - routing did not complete successfully, so ' + RtePath +
+            ' was not produced or is stale. Not attempting to import anything.' + #13#10 +
+            'Command line was:' + #13#10 + CmdLine);
+        Exit;
+    End;
+
+    If Not FileExists(RtePath) Then
+    Begin
+        ShowMessage('freerouting reported success (exit code 0), but ' + RtePath +
+            ' does not exist. This should not happen - check freerouting''s own log output.');
+        Exit;
+    End;
+
+    // A missing file is a clean failure; a truncated one is worse, because it
+    // can look plausible on import. Loading it fully and checking it is
+    // non-empty is the cheap version of that stability check - WSHShell.Run
+    // already waited for the process to exit before this point, so there is
+    // no concurrently-still-writing process the way there would be if this
+    // script had launched freerouting and moved on without waiting.
+    RteLineCount := 0;
+    RteLines := TStringList.Create;
+    Try
+        RteLines.LoadFromFile(RtePath);
+        RteLineCount := RteLines.Count;
+    Finally
+        RteLines.Free;
+    End;
+
+    If RteLineCount = 0 Then
+    Begin
+        ShowMessage(RtePath + ' exists but is empty - not attempting to import it.');
+        Exit;
+    End;
+
+    ShowMessage(
+        'freerouting finished (exit code 0).' + #13#10 +
+        'Wrote ' + RtePath + ' (' + IntToStr(RteLineCount) + ' lines).' + #13#10 + #13#10 +
+        'One manual step remains - no confirmed scriptable way to trigger Altium''s ' +
+        'Specctra importer was found (see this procedure''s header comment and ' +
+        'docs/altium-freerouting-automation.md):' + #13#10 +
+        'File > Import Wizard > Specctra Session or Route File, then select:' + #13#10 +
+        RtePath
+    );
 End;
 {..............................................................................}
