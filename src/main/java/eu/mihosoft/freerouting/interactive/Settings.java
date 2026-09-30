@@ -53,7 +53,12 @@ public class Settings implements java.io.Serializable
         vertical_component_grid = 0;
         automatic_neckdown = true;
         manual_rule_selection = false;
-        hilight_routing_obstacle = false;
+        // Default on: this is the cheapest available answer to "why isn't the UI moving" during
+        // push/shove routing -- it highlights the item blocking the current shove using data
+        // (RoutingBoard.get_shove_failing_obstacle()) that is already computed as a byproduct of
+        // the shove attempt, so it costs nothing extra to show. A saved GUIDefaultsFile still
+        // round-trips an explicit off (see GUIDefaultsFile.read/write_hilight_routing_obstacle_scope).
+        hilight_routing_obstacle = true;
         manual_trace_clearance_class = 1;
         manual_via_rule_index = 0;
         zoom_with_wheel = true;

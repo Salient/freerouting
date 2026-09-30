@@ -23,6 +23,9 @@
 
 package eu.mihosoft.freerouting.board;
 
+import eu.mihosoft.freerouting.datastructures.Stoppable;
+import eu.mihosoft.freerouting.datastructures.TimeLimit;
+
 import eu.mihosoft.freerouting.geometry.planar.ConvexShape;
 import eu.mihosoft.freerouting.geometry.planar.IntPoint;
 import eu.mihosoft.freerouting.geometry.planar.Point;
@@ -53,6 +56,32 @@ public class ForcedViaAlgo
             TileShape p_room_shape, Point p_location, int p_layer,
             int[] p_net_no_arr, int p_max_recursion_depth,
             int p_max_via_recursion_depth, RoutingBoard p_board)
+    {
+        return check_layer(p_via_radius, p_cl_class, p_attach_smd_allowed, p_room_shape, p_location, p_layer,
+                p_net_no_arr, p_max_recursion_depth, p_max_via_recursion_depth, p_board, null, null);
+    }
+
+    /**
+     * As above, but bounded by p_time_limit. Unlike ShoveTraceAlgo, ForcedPadAlgo and
+     * MoveDrillItemAlgo, this class previously had no way at all to accept a time limit,
+     * even though it sits in the same shove call graph (via ForcedPadAlgo.check_forced_pad).
+     */
+    public static ForcedPadAlgo.CheckDrillResult check_layer(double p_via_radius, int p_cl_class, boolean p_attach_smd_allowed,
+            TileShape p_room_shape, Point p_location, int p_layer,
+            int[] p_net_no_arr, int p_max_recursion_depth,
+            int p_max_via_recursion_depth, RoutingBoard p_board, TimeLimit p_time_limit)
+    {
+        return check_layer(p_via_radius, p_cl_class, p_attach_smd_allowed, p_room_shape, p_location, p_layer,
+                p_net_no_arr, p_max_recursion_depth, p_max_via_recursion_depth, p_board, p_time_limit, null);
+    }
+
+    /**
+     * As above, but also abandonable via p_stoppable_thread.
+     */
+    public static ForcedPadAlgo.CheckDrillResult check_layer(double p_via_radius, int p_cl_class, boolean p_attach_smd_allowed,
+            TileShape p_room_shape, Point p_location, int p_layer,
+            int[] p_net_no_arr, int p_max_recursion_depth,
+            int p_max_via_recursion_depth, RoutingBoard p_board, TimeLimit p_time_limit, Stoppable p_stoppable_thread)
     {
         if (p_via_radius <= 0)
         {
@@ -89,15 +118,39 @@ public class ForcedViaAlgo
         }
         
         ForcedPadAlgo.CheckDrillResult result = forced_pad_algo.check_forced_pad(tile_shape, from_side, p_layer, p_net_no_arr,
-                p_cl_class, p_attach_smd_allowed, null, p_max_recursion_depth, p_max_via_recursion_depth, false, null);
+                p_cl_class, p_attach_smd_allowed, null, p_max_recursion_depth, p_max_via_recursion_depth, false, p_time_limit,
+                p_stoppable_thread);
         return result;
     }
-    
+
     /**
      * Checks, if a Via is possible with the input parameter after evtl. shoving aside obstacle traces.
+     * Equivalent to calling the overload below with a null (unlimited) time limit and no stoppable
+     * thread; kept so that eu.mihosoft.freerouting.autoroute.InsertFoundConnectionAlgo, which is out
+     * of scope here, does not need to be touched.
      */
     public static boolean check(ViaInfo p_via_info, Point p_location, int[] p_net_no_arr, int p_max_recursion_depth,
             int p_max_via_recursion_depth, RoutingBoard p_board)
+    {
+        return check(p_via_info, p_location, p_net_no_arr, p_max_recursion_depth, p_max_via_recursion_depth, p_board,
+                null, null);
+    }
+
+    /**
+     * As above, but bounded by p_time_limit.
+     */
+    public static boolean check(ViaInfo p_via_info, Point p_location, int[] p_net_no_arr, int p_max_recursion_depth,
+            int p_max_via_recursion_depth, RoutingBoard p_board, TimeLimit p_time_limit)
+    {
+        return check(p_via_info, p_location, p_net_no_arr, p_max_recursion_depth, p_max_via_recursion_depth, p_board,
+                p_time_limit, null);
+    }
+
+    /**
+     * As above, but also abandonable via p_stoppable_thread.
+     */
+    public static boolean check(ViaInfo p_via_info, Point p_location, int[] p_net_no_arr, int p_max_recursion_depth,
+            int p_max_via_recursion_depth, RoutingBoard p_board, TimeLimit p_time_limit, Stoppable p_stoppable_thread)
     {
         Vector translate_vector = p_location.difference_by(Point.ZERO);
         int calc_from_side_offset = p_board.get_min_trace_half_width();
@@ -123,7 +176,8 @@ public class ForcedViaAlgo
             CalcFromSide from_side
                     = forced_pad_algo.calc_from_side(tile_shape, p_location, i, calc_from_side_offset,p_via_info.get_clearance_class());
             if (forced_pad_algo.check_forced_pad(tile_shape, from_side, i, p_net_no_arr, p_via_info.get_clearance_class(),
-                    p_via_info.attach_smd_allowed(), null, p_max_recursion_depth, p_max_via_recursion_depth, false, null)
+                    p_via_info.attach_smd_allowed(), null, p_max_recursion_depth, p_max_via_recursion_depth, false, p_time_limit,
+                    p_stoppable_thread)
                     == ForcedPadAlgo.CheckDrillResult.NOT_DRILLABLE)
             {
                 p_board.set_shove_failing_layer(i);
@@ -187,7 +241,7 @@ public class ForcedViaAlgo
             CalcFromSide from_side
                     = forced_pad_algo.calc_from_side(tile_shape, p_location, i, calc_from_side_offset,p_via_info.get_clearance_class());
             if (!forced_pad_algo.forced_pad(tile_shape, from_side, i, p_net_no_arr, p_via_info.get_clearance_class(),
-                    p_via_info.attach_smd_allowed(), null, p_max_recursion_depth, p_max_via_recursion_depth))
+                    p_via_info.attach_smd_allowed(), null, p_max_recursion_depth, p_max_via_recursion_depth, null, null))
             {
                 p_board.set_shove_failing_layer(i);
                 return false;
@@ -196,7 +250,7 @@ public class ForcedViaAlgo
             {
                 // necessesary in case strart_trace_shape is bigger than tile_shape
                 if (!forced_pad_algo.forced_pad(start_trace_shape, from_side, i, p_net_no_arr, p_trace_clearance_class_no,
-                        true, null, p_max_recursion_depth, p_max_via_recursion_depth))
+                        true, null, p_max_recursion_depth, p_max_via_recursion_depth, null, null))
                 {
                     p_board.set_shove_failing_layer(i);
                     return false;

@@ -18,6 +18,7 @@
  */
 package eu.mihosoft.freerouting.board;
 
+import eu.mihosoft.freerouting.datastructures.Stoppable;
 import eu.mihosoft.freerouting.datastructures.TimeLimit;
 
 import eu.mihosoft.freerouting.geometry.planar.ConvexShape;
@@ -59,9 +60,10 @@ public class ShoveTraceAlgo
     public boolean check(TileShape p_trace_shape, CalcFromSide p_from_side,
             Direction p_dir, int p_layer, int[] p_net_no_arr,
             int p_cl_type, int p_max_recursion_depth, int p_max_via_recursion_depth,
-            int p_max_spring_over_recursion_depth, TimeLimit p_time_limit)
+            int p_max_spring_over_recursion_depth, TimeLimit p_time_limit, Stoppable p_stoppable_thread)
     {
-        if (p_time_limit != null && p_time_limit.limit_exceeded())
+        if (p_time_limit != null && p_time_limit.limit_exceeded()
+                || p_stoppable_thread != null && p_stoppable_thread.is_stop_requested())
         {
             return false;
         }
@@ -126,7 +128,7 @@ public class ShoveTraceAlgo
                     Vector delta = try_via_centers[i].difference_by(curr_shove_via.get_center());
                     Collection<Item> ignore_items = new java.util.LinkedList<Item>();
                     if (MoveDrillItemAlgo.check(curr_shove_via, delta, p_max_recursion_depth,
-                            p_max_via_recursion_depth - 1, ignore_items, this.board, p_time_limit))
+                            p_max_via_recursion_depth - 1, ignore_items, this.board, p_time_limit, p_stoppable_thread))
                     {
                         shove_via_ok = true;
                         break;
@@ -162,7 +164,8 @@ public class ShoveTraceAlgo
             {
                 Polyline new_polyline = spring_over(curr_substitute_trace.polyline(),
                         curr_substitute_trace.get_compensated_half_width(search_tree), p_layer, curr_substitute_trace.net_no_arr,
-                        curr_substitute_trace.clearance_class_no(), false, p_max_spring_over_recursion_depth, null);
+                        curr_substitute_trace.clearance_class_no(), false, p_max_spring_over_recursion_depth, null,
+                        p_time_limit, p_stoppable_thread);
                 if (new_polyline == null)
                 {
                     // spring_over did not work
@@ -186,7 +189,7 @@ public class ShoveTraceAlgo
                     if (!this.check(curr.shape, curr.from_side, curr_dir, p_layer, curr_substitute_trace.net_no_arr,
                             curr_substitute_trace.clearance_class_no(),
                             p_max_recursion_depth - 1, p_max_via_recursion_depth,
-                            p_max_spring_over_recursion_depth, p_time_limit))
+                            p_max_spring_over_recursion_depth, p_time_limit, p_stoppable_thread))
                     {
                         return false;
                     }
@@ -369,8 +372,19 @@ public class ShoveTraceAlgo
      */
     public boolean insert(TileShape p_trace_shape, CalcFromSide p_from_side, int p_layer, int[] p_net_no_arr,
             int p_cl_type, Collection<Item> p_ignore_items,
-            int p_max_recursion_depth, int p_max_via_recursion_depth, int p_max_spring_over_recursion_depth)
+            int p_max_recursion_depth, int p_max_via_recursion_depth, int p_max_spring_over_recursion_depth,
+            TimeLimit p_time_limit, Stoppable p_stoppable_thread)
     {
+        // A timeout/stop request here is safe to report as an ordinary shove failure: insert()
+        // is only ever called after check() already agreed the shove is possible, so the caller
+        // (RoutingBoard.insert_forced_trace_polyline) already treats any false return from
+        // this recursion as "check was inaccurate, undo and give up" -- exactly the recovery
+        // an abandoned-for-time-or-stop-reasons attempt needs.
+        if (p_time_limit != null && p_time_limit.limit_exceeded()
+                || p_stoppable_thread != null && p_stoppable_thread.is_stop_requested())
+        {
+            return false;
+        }
         if (p_trace_shape.is_empty())
         {
             FRLogger.warn("ShoveTraceAux.insert: p_trace_shape is empty");
@@ -382,7 +396,8 @@ public class ShoveTraceAlgo
             return false;
         }
         if (!MoveDrillItemAlgo.shove_vias(p_trace_shape, p_from_side, p_layer, p_net_no_arr, p_cl_type,
-                p_ignore_items, p_max_recursion_depth, p_max_via_recursion_depth, true, this.board))
+                p_ignore_items, p_max_recursion_depth, p_max_via_recursion_depth, true, this.board, p_time_limit,
+                p_stoppable_thread))
         {
             return false;
         }
@@ -433,7 +448,8 @@ public class ShoveTraceAlgo
             {
                 Polyline new_polyline = spring_over(curr_substitute_trace.polyline(),
                         curr_substitute_trace.get_compensated_half_width(search_tree), p_layer, curr_substitute_trace.net_no_arr,
-                        curr_substitute_trace.clearance_class_no(), false, p_max_spring_over_recursion_depth, null);
+                        curr_substitute_trace.clearance_class_no(), false, p_max_spring_over_recursion_depth, null,
+                        p_time_limit, p_stoppable_thread);
 
                 if (new_polyline == null)
                 {
@@ -453,7 +469,8 @@ public class ShoveTraceAlgo
                 CalcShapeAndFromSide curr =
                         new CalcShapeAndFromSide(curr_substitute_trace, i, is_orthogonal_mode, false);
                 if (!this.insert(curr.shape, curr.from_side, p_layer, curr_net_no_arr, curr_substitute_trace.clearance_class_no(),
-                        p_ignore_items, p_max_recursion_depth - 1, p_max_via_recursion_depth, p_max_spring_over_recursion_depth))
+                        p_ignore_items, p_max_recursion_depth - 1, p_max_via_recursion_depth, p_max_spring_over_recursion_depth,
+                        p_time_limit, p_stoppable_thread))
                 {
                     return false;
                 }
@@ -527,8 +544,15 @@ public class ShoveTraceAlgo
      */
     private Polyline spring_over(Polyline p_polyline, int p_half_width,
             int p_layer, int[] p_net_no_arr, int p_cl_type, boolean p_over_connected_pins,
-            int p_recursion_depth, Set<Pin> p_contact_pins)
+            int p_recursion_depth, Set<Pin> p_contact_pins, TimeLimit p_time_limit, Stoppable p_stoppable_thread)
     {
+        if (p_time_limit != null && p_time_limit.limit_exceeded()
+                || p_stoppable_thread != null && p_stoppable_thread.is_stop_requested())
+        {
+            // No single obstacle to blame for a timeout/stop request; just give up on wrapping
+            // around it, exactly like running out of p_recursion_depth does below.
+            return null;
+        }
         Item found_obstacle = null;
         IntBox found_obstacle_bounding_box = null;
         ShapeSearchTree search_tree = this.board.search_tree_manager.get_default_tree();
@@ -788,7 +812,7 @@ public class ShoveTraceAlgo
             result = result.combine(pieces[1]);
         }
         return spring_over(result, p_half_width, p_layer, p_net_no_arr, p_cl_type, p_over_connected_pins,
-                p_recursion_depth - 1, p_contact_pins);
+                p_recursion_depth - 1, p_contact_pins, p_time_limit, p_stoppable_thread);
     }
 
     /**
@@ -800,21 +824,38 @@ public class ShoveTraceAlgo
      * way around the obstaccles.
      * If p_contact_pins != null, all pins not contained in p_contact_pins are
      * regarded as obstacles, even if they are of the own net.
+     * Equivalent to calling the overload below with a null (unlimited) time limit and no
+     * stoppable thread; kept so that eu.mihosoft.freerouting.board.PullTightAlgo, which is out
+     * of scope here, does not need to be touched.
      */
     Polyline spring_over_obstacles(
             Polyline p_polyline, int p_half_width, int p_layer, int[] p_net_no_arr,
             int p_cl_type, Set<Pin> p_contact_pins)
     {
+        return spring_over_obstacles(p_polyline, p_half_width, p_layer, p_net_no_arr, p_cl_type, p_contact_pins, null,
+                null);
+    }
+
+    /**
+     * As above, but bounded by p_time_limit and abandonable via p_stoppable_thread. This is the
+     * version used on the interactive routing path (RoutingBoard.insert_forced_trace_polyline),
+     * where spring-over previously ran with no time limit and no way to be stopped at all,
+     * holding up the whole shove.
+     */
+    Polyline spring_over_obstacles(
+            Polyline p_polyline, int p_half_width, int p_layer, int[] p_net_no_arr,
+            int p_cl_type, Set<Pin> p_contact_pins, TimeLimit p_time_limit, Stoppable p_stoppable_thread)
+    {
         final int c_max_spring_over_recursion_depth = 20;
         Polyline counter_clock_wise_result = spring_over(p_polyline, p_half_width, p_layer, p_net_no_arr, p_cl_type,
-                true, c_max_spring_over_recursion_depth, p_contact_pins);
+                true, c_max_spring_over_recursion_depth, p_contact_pins, p_time_limit, p_stoppable_thread);
         if (counter_clock_wise_result == p_polyline)
         {
             return p_polyline; // no obstacle
         }
 
         Polyline clock_wise_result = spring_over(p_polyline.reverse(), p_half_width, p_layer, p_net_no_arr, p_cl_type,
-                true, c_max_spring_over_recursion_depth, p_contact_pins);
+                true, c_max_spring_over_recursion_depth, p_contact_pins, p_time_limit, p_stoppable_thread);
         Polyline result = null;
         if (clock_wise_result != null && counter_clock_wise_result != null)
         {

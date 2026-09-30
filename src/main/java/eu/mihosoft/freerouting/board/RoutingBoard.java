@@ -188,6 +188,30 @@ public class RoutingBoard extends BasicBoard implements java.io.Serializable
     }
 
     /**
+     * Discards the currently marked changed area without optimizing it. Use this instead of
+     * leaving changed_area set when the geometry it describes has already been fully restored
+     * (for example right after board.undo()), so that a stale region is not silently inherited
+     * by the next start_marking_changed_area() call -- which is a no-op while changed_area != null.
+     */
+    public void clear_changed_area()
+    {
+        changed_area = null;
+    }
+
+    /**
+     * The bounding box of the currently marked changed area, or null if nothing is marked.
+     * A diagnostic/test hook: start_marking_changed_area() only actually starts a fresh marking
+     * when this returns null. If it stays non-null across successive interactive routing events,
+     * unrelated regions from different mouse-move attempts are silently being unioned together,
+     * so the eventual pull-tight can end up processing far more geometry than any single move
+     * touched. See the changed_area leak fixed in Route.next_corner.
+     */
+    public IntBox get_changed_area_extent()
+    {
+        return changed_area == null ? null : changed_area.surrounding_box();
+    }
+
+    /**
      * marks the whole board as changed
      */
     public void mark_all_changed_area()
@@ -629,6 +653,25 @@ public class RoutingBoard extends BasicBoard implements java.io.Serializable
             int p_max_spring_over_recursion_depth, int p_tidy_width,
             int p_pull_tight_accuracy, boolean p_with_check, TimeLimit p_time_limit)
     {
+        return insert_forced_trace_segment(p_from_corner, p_to_corner, p_half_width, p_layer, p_net_no_arr,
+                p_clearance_class_no, p_max_recursion_depth, p_max_via_recursion_depth,
+                p_max_spring_over_recursion_depth, p_tidy_width, p_pull_tight_accuracy, p_with_check, p_time_limit,
+                null);
+    }
+
+    /**
+     * As above, but also abandonable via p_stoppable_thread. This is the overload used on the
+     * interactive routing path (eu.mihosoft.freerouting.interactive.Route); the plain
+     * TimeLimit-only overload above is kept so that
+     * eu.mihosoft.freerouting.autoroute.InsertFoundConnectionAlgo, which is out of scope here,
+     * does not need to be touched.
+     */
+    public Point insert_forced_trace_segment(Point p_from_corner,
+            Point p_to_corner, int p_half_width, int p_layer, int[] p_net_no_arr,
+            int p_clearance_class_no, int p_max_recursion_depth, int p_max_via_recursion_depth,
+            int p_max_spring_over_recursion_depth, int p_tidy_width,
+            int p_pull_tight_accuracy, boolean p_with_check, TimeLimit p_time_limit, Stoppable p_stoppable_thread)
+    {
         if (p_from_corner.equals(p_to_corner))
         {
             return p_to_corner;
@@ -637,7 +680,7 @@ public class RoutingBoard extends BasicBoard implements java.io.Serializable
         Point ok_point = insert_forced_trace_polyline(insert_polyline, p_half_width, p_layer, p_net_no_arr,
                 p_clearance_class_no, p_max_recursion_depth, p_max_via_recursion_depth,
                 p_max_spring_over_recursion_depth, p_tidy_width,
-                p_pull_tight_accuracy, p_with_check, p_time_limit);
+                p_pull_tight_accuracy, p_with_check, p_time_limit, p_stoppable_thread);
         Point result;
         if (ok_point == insert_polyline.first_corner())
         {
@@ -679,7 +722,7 @@ public class RoutingBoard extends BasicBoard implements java.io.Serializable
 
             boolean check_shove_ok = shove_trace_algo.check(curr_trace_shape, from_side, null, p_layer,
                     p_net_no_arr, p_clearance_class_no, p_max_recursion_depth,
-                    p_max_via_recursion_depth, p_max_spring_over_recursion_depth, null);
+                    p_max_via_recursion_depth, p_max_spring_over_recursion_depth, null, null);
             if (!check_shove_ok)
             {
                 return false;
@@ -700,6 +743,21 @@ public class RoutingBoard extends BasicBoard implements java.io.Serializable
             int p_max_spring_over_recursion_depth, int p_tidy_width,
             int p_pull_tight_accuracy, boolean p_with_check, TimeLimit p_time_limit)
     {
+        return insert_forced_trace_polyline(p_polyline, p_half_width, p_layer, p_net_no_arr, p_clearance_class_no,
+                p_max_recursion_depth, p_max_via_recursion_depth, p_max_spring_over_recursion_depth, p_tidy_width,
+                p_pull_tight_accuracy, p_with_check, p_time_limit, null);
+    }
+
+    /**
+     * As above, but also abandonable via p_stoppable_thread. See
+     * insert_forced_trace_segment(..., Stoppable) for why this is a separate overload rather
+     * than a signature change.
+     */
+    public Point insert_forced_trace_polyline(Polyline p_polyline, int p_half_width, int p_layer, int[] p_net_no_arr,
+            int p_clearance_class_no, int p_max_recursion_depth, int p_max_via_recursion_depth,
+            int p_max_spring_over_recursion_depth, int p_tidy_width,
+            int p_pull_tight_accuracy, boolean p_with_check, TimeLimit p_time_limit, Stoppable p_stoppable_thread)
+    {
         clear_shove_failing_obstacle();
         Point from_corner = p_polyline.first_corner();
         Point to_corner = p_polyline.last_corner();
@@ -713,200 +771,244 @@ public class RoutingBoard extends BasicBoard implements java.io.Serializable
             return from_corner;
         }
         start_marking_changed_area();
-        // Check, if there ends a item of the same net at p_from_corner.
-        // If so, its geometry will be used to cut off dog ears of the check shape.
-        Trace picked_trace = null;
-        ItemSelectionFilter filter = new ItemSelectionFilter(ItemSelectionFilter.SelectableChoices.TRACES);
-        Set<Item> picked_items = this.pick_items(from_corner, p_layer, filter);
-        if (picked_items.size() == 1)
+        // Per-phase timing for this call, logged once in the finally block below regardless of
+        // which return path is taken. This is the only place on the interactive push/shove path
+        // that previously had no timing at all; see also Route.next_corner, which times the
+        // second (post-insert) pull-tight pass that runs after this method returns.
+        final long phase_timing_start_ns = System.nanoTime();
+        long spring_over_ns = 0;
+        long check_ns = 0;
+        long insert_ns = 0;
+        long pull_tight_pass1_ns = 0;
+        try
         {
-            Trace curr_picked_trace = (Trace) picked_items.iterator().next();
-            if (curr_picked_trace.nets_equal(p_net_no_arr) && curr_picked_trace.get_half_width() == p_half_width && curr_picked_trace.clearance_class_no() == p_clearance_class_no && (curr_picked_trace instanceof PolylineTrace))
+            // Check, if there ends a item of the same net at p_from_corner.
+            // If so, its geometry will be used to cut off dog ears of the check shape.
+            Trace picked_trace = null;
+            ItemSelectionFilter filter = new ItemSelectionFilter(ItemSelectionFilter.SelectableChoices.TRACES);
+            Set<Item> picked_items = this.pick_items(from_corner, p_layer, filter);
+            if (picked_items.size() == 1)
             {
-                // can combine  with the picked trace
-                picked_trace = curr_picked_trace;
-            }
-        }
-        ShapeSearchTree search_tree = search_tree_manager.get_default_tree();
-        int compensated_half_width = p_half_width + search_tree.clearance_compensation_value(p_clearance_class_no, p_layer);
-        ShoveTraceAlgo shove_trace_algo = new ShoveTraceAlgo(this);
-        Polyline new_polyline = shove_trace_algo.spring_over_obstacles(p_polyline,
-                compensated_half_width, p_layer, p_net_no_arr, p_clearance_class_no, null);
-        if (new_polyline == null)
-        {
-            return from_corner;
-        }
-        Polyline combined_polyline;
-        if (picked_trace == null)
-        {
-            combined_polyline = new_polyline;
-        }
-        else
-        {
-            PolylineTrace combine_trace = (PolylineTrace) picked_trace;
-            combined_polyline = new_polyline.combine(combine_trace.polyline());
-        }
-        if (combined_polyline.arr.length < 3)
-        {
-            return from_corner;
-        }
-        int start_shape_no = combined_polyline.arr.length - new_polyline.arr.length;
-        // calculate the last shapes of combined_polyline for checking
-        TileShape[] trace_shapes = combined_polyline.offset_shapes(compensated_half_width,
-                start_shape_no, combined_polyline.arr.length - 1);
-        int last_shape_no = trace_shapes.length;
-        boolean orthogonal_mode = (rules.get_trace_angle_restriction() == AngleRestriction.NINETY_DEGREE);
-        for (int i = 0; i < trace_shapes.length; ++i)
-        {
-            TileShape curr_trace_shape = trace_shapes[i];
-            if (orthogonal_mode)
-            {
-                curr_trace_shape = curr_trace_shape.bounding_box();
-            }
-            CalcFromSide from_side = new CalcFromSide(combined_polyline,
-                    combined_polyline.corner_count() - trace_shapes.length - 1 + i, curr_trace_shape);
-            if (p_with_check)
-            {
-                boolean check_shove_ok = shove_trace_algo.check(curr_trace_shape, from_side, null, p_layer,
-                        p_net_no_arr, p_clearance_class_no, p_max_recursion_depth,
-                        p_max_via_recursion_depth, p_max_spring_over_recursion_depth, p_time_limit);
-                if (!check_shove_ok)
+                Trace curr_picked_trace = (Trace) picked_items.iterator().next();
+                if (curr_picked_trace.nets_equal(p_net_no_arr) && curr_picked_trace.get_half_width() == p_half_width && curr_picked_trace.clearance_class_no() == p_clearance_class_no && (curr_picked_trace instanceof PolylineTrace))
                 {
-                    last_shape_no = i;
-                    break;
+                    // can combine  with the picked trace
+                    picked_trace = curr_picked_trace;
                 }
             }
-            boolean insert_ok = shove_trace_algo.insert(curr_trace_shape, from_side, p_layer, p_net_no_arr,
-                    p_clearance_class_no, null, p_max_recursion_depth,
-                    p_max_via_recursion_depth, p_max_spring_over_recursion_depth);
-            if (!insert_ok)
+            ShapeSearchTree search_tree = search_tree_manager.get_default_tree();
+            int compensated_half_width = p_half_width + search_tree.clearance_compensation_value(p_clearance_class_no, p_layer);
+            ShoveTraceAlgo shove_trace_algo = new ShoveTraceAlgo(this);
+            long spring_over_t0 = System.nanoTime();
+            Polyline new_polyline = shove_trace_algo.spring_over_obstacles(p_polyline,
+                    compensated_half_width, p_layer, p_net_no_arr, p_clearance_class_no, null, p_time_limit,
+                    p_stoppable_thread);
+            spring_over_ns += System.nanoTime() - spring_over_t0;
+            if (new_polyline == null)
             {
-                return null;
-            }
-        }
-        Point new_corner = to_corner;
-        if (last_shape_no < trace_shapes.length)
-        {
-            // the shove with index last_shape_no failed.
-            // Sample the shove line to a shorter shove distance and try again.
-            TileShape last_trace_shape = trace_shapes[last_shape_no];
-            if (orthogonal_mode)
-            {
-                last_trace_shape = last_trace_shape.bounding_box();
-            }
-            int sample_width = 2 * this.get_min_trace_half_width();
-            FloatPoint last_corner = new_polyline.corner_approx(last_shape_no + 1);
-            FloatPoint prev_last_corner = new_polyline.corner_approx(last_shape_no);
-            double last_segment_length = last_corner.distance(prev_last_corner);
-            if (last_segment_length > 100 * sample_width)
-            {
-                // to many cycles to sample
                 return from_corner;
             }
-            int shape_index = combined_polyline.corner_count() - trace_shapes.length - 1 + last_shape_no;
-            if (last_segment_length > sample_width)
+            Polyline combined_polyline;
+            if (picked_trace == null)
             {
-                new_polyline =
-                        new_polyline.shorten(new_polyline.arr.length - (trace_shapes.length - last_shape_no - 1), sample_width);
-                Point curr_last_corner = new_polyline.last_corner();
-                if (!(curr_last_corner instanceof IntPoint))
+                combined_polyline = new_polyline;
+            }
+            else
+            {
+                PolylineTrace combine_trace = (PolylineTrace) picked_trace;
+                combined_polyline = new_polyline.combine(combine_trace.polyline());
+            }
+            if (combined_polyline.arr.length < 3)
+            {
+                return from_corner;
+            }
+            int start_shape_no = combined_polyline.arr.length - new_polyline.arr.length;
+            // calculate the last shapes of combined_polyline for checking
+            TileShape[] trace_shapes = combined_polyline.offset_shapes(compensated_half_width,
+                    start_shape_no, combined_polyline.arr.length - 1);
+            int last_shape_no = trace_shapes.length;
+            boolean orthogonal_mode = (rules.get_trace_angle_restriction() == AngleRestriction.NINETY_DEGREE);
+            for (int i = 0; i < trace_shapes.length; ++i)
+            {
+                TileShape curr_trace_shape = trace_shapes[i];
+                if (orthogonal_mode)
                 {
-                    FRLogger.warn("insert_forced_trace_segment: IntPoint expected");
-                    return from_corner;
+                    curr_trace_shape = curr_trace_shape.bounding_box();
                 }
-                new_corner = curr_last_corner;
-                if (picked_trace == null)
+                CalcFromSide from_side = new CalcFromSide(combined_polyline,
+                        combined_polyline.corner_count() - trace_shapes.length - 1 + i, curr_trace_shape);
+                if (p_with_check)
                 {
-                    combined_polyline = new_polyline;
+                    long check_t0 = System.nanoTime();
+                    boolean check_shove_ok = shove_trace_algo.check(curr_trace_shape, from_side, null, p_layer,
+                            p_net_no_arr, p_clearance_class_no, p_max_recursion_depth,
+                            p_max_via_recursion_depth, p_max_spring_over_recursion_depth, p_time_limit,
+                            p_stoppable_thread);
+                    check_ns += System.nanoTime() - check_t0;
+                    if (!check_shove_ok)
+                    {
+                        last_shape_no = i;
+                        break;
+                    }
                 }
-                else
+                long insert_t0 = System.nanoTime();
+                boolean insert_ok = shove_trace_algo.insert(curr_trace_shape, from_side, p_layer, p_net_no_arr,
+                        p_clearance_class_no, null, p_max_recursion_depth,
+                        p_max_via_recursion_depth, p_max_spring_over_recursion_depth, p_time_limit,
+                        p_stoppable_thread);
+                insert_ns += System.nanoTime() - insert_t0;
+                if (!insert_ok)
                 {
-                    PolylineTrace combine_trace = (PolylineTrace) picked_trace;
-                    combined_polyline = new_polyline.combine(combine_trace.polyline());
+                    return null;
                 }
-                if (combined_polyline.arr.length < 3)
-                {
-                    return new_corner;
-                }
-                shape_index = combined_polyline.arr.length - 3;
-                last_trace_shape = combined_polyline.offset_shape(compensated_half_width, shape_index);
+            }
+            Point new_corner = to_corner;
+            if (last_shape_no < trace_shapes.length)
+            {
+                // the shove with index last_shape_no failed.
+                // Sample the shove line to a shorter shove distance and try again.
+                TileShape last_trace_shape = trace_shapes[last_shape_no];
                 if (orthogonal_mode)
                 {
                     last_trace_shape = last_trace_shape.bounding_box();
                 }
+                int sample_width = 2 * this.get_min_trace_half_width();
+                FloatPoint last_corner = new_polyline.corner_approx(last_shape_no + 1);
+                FloatPoint prev_last_corner = new_polyline.corner_approx(last_shape_no);
+                double last_segment_length = last_corner.distance(prev_last_corner);
+                if (last_segment_length > 100 * sample_width)
+                {
+                    // to many cycles to sample
+                    return from_corner;
+                }
+                int shape_index = combined_polyline.corner_count() - trace_shapes.length - 1 + last_shape_no;
+                if (last_segment_length > sample_width)
+                {
+                    new_polyline =
+                            new_polyline.shorten(new_polyline.arr.length - (trace_shapes.length - last_shape_no - 1), sample_width);
+                    Point curr_last_corner = new_polyline.last_corner();
+                    if (!(curr_last_corner instanceof IntPoint))
+                    {
+                        FRLogger.warn("insert_forced_trace_segment: IntPoint expected");
+                        return from_corner;
+                    }
+                    new_corner = curr_last_corner;
+                    if (picked_trace == null)
+                    {
+                        combined_polyline = new_polyline;
+                    }
+                    else
+                    {
+                        PolylineTrace combine_trace = (PolylineTrace) picked_trace;
+                        combined_polyline = new_polyline.combine(combine_trace.polyline());
+                    }
+                    if (combined_polyline.arr.length < 3)
+                    {
+                        return new_corner;
+                    }
+                    shape_index = combined_polyline.arr.length - 3;
+                    last_trace_shape = combined_polyline.offset_shape(compensated_half_width, shape_index);
+                    if (orthogonal_mode)
+                    {
+                        last_trace_shape = last_trace_shape.bounding_box();
+                    }
+                }
+                CalcFromSide from_side = new CalcFromSide(combined_polyline, shape_index, last_trace_shape);
+                long check_t0 = System.nanoTime();
+                boolean check_shove_ok = shove_trace_algo.check(last_trace_shape, from_side, null, p_layer,
+                        p_net_no_arr, p_clearance_class_no, p_max_recursion_depth,
+                        p_max_via_recursion_depth, p_max_spring_over_recursion_depth, p_time_limit,
+                        p_stoppable_thread);
+                check_ns += System.nanoTime() - check_t0;
+                if (!check_shove_ok)
+                {
+                    return from_corner;
+                }
+                long insert_t0 = System.nanoTime();
+                boolean insert_ok = shove_trace_algo.insert(last_trace_shape, from_side, p_layer,
+                        p_net_no_arr, p_clearance_class_no, null, p_max_recursion_depth,
+                        p_max_via_recursion_depth, p_max_spring_over_recursion_depth, p_time_limit,
+                        p_stoppable_thread);
+                insert_ns += System.nanoTime() - insert_t0;
+                if (!insert_ok)
+                {
+                    FRLogger.warn("shove trace failed");
+                    return null;
+                }
             }
-            CalcFromSide from_side = new CalcFromSide(combined_polyline, shape_index, last_trace_shape);
-            boolean check_shove_ok = shove_trace_algo.check(last_trace_shape, from_side, null, p_layer,
-                    p_net_no_arr, p_clearance_class_no, p_max_recursion_depth,
-                    p_max_via_recursion_depth, p_max_spring_over_recursion_depth, p_time_limit);
-            if (!check_shove_ok)
+            // insert the new trace segment
+            for (int i = 0; i < new_polyline.corner_count(); ++i)
             {
-                return from_corner;
+                join_changed_area(new_polyline.corner_approx(i), p_layer);
             }
-            boolean insert_ok = shove_trace_algo.insert(last_trace_shape, from_side, p_layer,
-                    p_net_no_arr, p_clearance_class_no, null, p_max_recursion_depth,
-                    p_max_via_recursion_depth, p_max_spring_over_recursion_depth);
-            if (!insert_ok)
+            PolylineTrace new_trace = insert_trace_without_cleaning(new_polyline, p_layer, p_half_width, p_net_no_arr, p_clearance_class_no, FixedState.UNFIXED);
+            new_trace.combine();
+
+            IntOctagon tidy_region = null;
+            if (p_tidy_width < Integer.MAX_VALUE)
             {
-                FRLogger.warn("shove trace failed");
-                return null;
+                tidy_region = new_corner.surrounding_octagon().enlarge(p_tidy_width);
             }
-        }
-        // insert the new trace segment
-        for (int i = 0; i < new_polyline.corner_count(); ++i)
-        {
-            join_changed_area(new_polyline.corner_approx(i), p_layer);
-        }
-        PolylineTrace new_trace = insert_trace_without_cleaning(new_polyline, p_layer, p_half_width, p_net_no_arr, p_clearance_class_no, FixedState.UNFIXED);
-        new_trace.combine();
+            int[] opt_net_no_arr;
+            if (p_max_recursion_depth <= 0)
+            {
+                opt_net_no_arr = p_net_no_arr;
+            }
+            else
+            {
+                opt_net_no_arr = new int[0];
+            }
+            // Give pull-tight pass 1 a real budget instead of the unlimited "-1" it used to get.
+            // Non-RELEASE test levels keep it unbounded, matching the debugging affordance already
+            // used for CHECK_FORCED_TRACE_TIME_LIMIT / PULL_TIGHT_TIME_LIMIT in Route's constructor.
+            int pull_tight_pass1_time_limit =
+                    (this.get_test_level() == TestLevel.RELEASE_VERSION) ? PULL_TIGHT_TIME_LIMIT : -1;
+            long pull_tight_t0 = System.nanoTime();
+            PullTightAlgo pull_tight_algo =
+                    PullTightAlgo.get_instance(this, opt_net_no_arr, tidy_region,
+                    p_pull_tight_accuracy, p_stoppable_thread, pull_tight_pass1_time_limit, new_corner, p_layer);
 
-        IntOctagon tidy_region = null;
-        if (p_tidy_width < Integer.MAX_VALUE)
-        {
-            tidy_region = new_corner.surrounding_octagon().enlarge(p_tidy_width);
-        }
-        int[] opt_net_no_arr;
-        if (p_max_recursion_depth <= 0)
-        {
-            opt_net_no_arr = p_net_no_arr;
-        }
-        else
-        {
-            opt_net_no_arr = new int[0];
-        }
-        PullTightAlgo pull_tight_algo =
-                PullTightAlgo.get_instance(this, opt_net_no_arr, tidy_region,
-                p_pull_tight_accuracy, null, -1, new_corner, p_layer);
+            try {
+                // Remove evtl. generated cycles because otherwise pull_tight may not work correctly.
+                if (new_trace.normalize(changed_area.get_area(p_layer))) {
 
-        try {
-            // Remove evtl. generated cycles because otherwise pull_tight may not work correctly.
-            if (new_trace.normalize(changed_area.get_area(p_layer))) {
-
-                pull_tight_algo.split_traces_at_keep_point();
-                // otherwise the new corner may no more be contained in the new trace after optimizing
-                ItemSelectionFilter item_filter = new ItemSelectionFilter(ItemSelectionFilter.SelectableChoices.TRACES);
-                Set<Item> curr_picked_items = this.pick_items(new_corner, p_layer, item_filter);
-                new_trace = null;
-                if (!curr_picked_items.isEmpty()) {
-                    Item found_trace = curr_picked_items.iterator().next();
-                    if (found_trace instanceof PolylineTrace) {
-                        new_trace = (PolylineTrace) found_trace;
+                    pull_tight_algo.split_traces_at_keep_point();
+                    // otherwise the new corner may no more be contained in the new trace after optimizing
+                    ItemSelectionFilter item_filter = new ItemSelectionFilter(ItemSelectionFilter.SelectableChoices.TRACES);
+                    Set<Item> curr_picked_items = this.pick_items(new_corner, p_layer, item_filter);
+                    new_trace = null;
+                    if (!curr_picked_items.isEmpty()) {
+                        Item found_trace = curr_picked_items.iterator().next();
+                        if (found_trace instanceof PolylineTrace) {
+                            new_trace = (PolylineTrace) found_trace;
+                        }
                     }
                 }
             }
-        }
-        catch (Exception e)
-        {
-            FRLogger.error("Couldn't remove generated circles from the board.", e);
-        }
+            catch (Exception e)
+            {
+                FRLogger.error("Couldn't remove generated circles from the board.", e);
+            }
 
-        // To avoid, that a separate handling for moving backwards in the own trace line
-        // becomes necessesary, pull tight is called here.
-        if (p_tidy_width > 0 && new_trace != null)
-        {
-            new_trace.pull_tight(pull_tight_algo);
+            // To avoid, that a separate handling for moving backwards in the own trace line
+            // becomes necessesary, pull tight is called here.
+            if (p_tidy_width > 0 && new_trace != null)
+            {
+                new_trace.pull_tight(pull_tight_algo);
+            }
+            pull_tight_pass1_ns += System.nanoTime() - pull_tight_t0;
+            return new_corner;
         }
-        return new_corner;
+        finally
+        {
+            if (FRLogger.isTraceEnabled())
+            {
+                double total_ms = (System.nanoTime() - phase_timing_start_ns) / 1e6;
+                FRLogger.trace(String.format(
+                        "insert_forced_trace_polyline: total=%.1fms spring_over=%.1fms check=%.1fms insert=%.1fms pull_tight_pass1=%.1fms",
+                        total_ms, spring_over_ns / 1e6, check_ns / 1e6, insert_ns / 1e6, pull_tight_pass1_ns / 1e6));
+            }
+        }
     }
 
     /**

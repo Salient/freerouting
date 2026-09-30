@@ -37,6 +37,28 @@ public class FRLogger {
         logger.trace("Method '" + perfId.replace("{}", result != null ? result.toString() : "(null)") + "' was performed in " + performanceFormat.format(timeElapsed/1000.0) + " seconds.");
     }
 
+    /**
+     * Returns true, if trace-level messages are actually going to be recorded.
+     * Callers that build up a fine-grained diagnostic message (e.g. a per-phase
+     * timing breakdown) should guard that work with this check, so that the cost
+     * of formatting the message is paid only when something will read it.
+     */
+    public static boolean isTraceEnabled()
+    {
+        return logger.isTraceEnabled();
+    }
+
+    /**
+     * Logs p_msg at trace level. Off by default on the console appender; see
+     * log4j2.xml. Used for cheap, opt-in performance diagnostics (see
+     * isTraceEnabled()) rather than the traceEntry/traceExit pair, when several
+     * related durations need to be reported together as a single line.
+     */
+    public static void trace(String msg)
+    {
+        logger.trace(msg);
+    }
+
     public static void info(String msg)
     {
         logger.info(msg);
