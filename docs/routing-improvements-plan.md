@@ -357,8 +357,13 @@ here is small enough that there is little to win.
 6. §3 confirm postroute is on, expose via-reduction effort (small)
 7. §6 step 3: profile a full run
 8. §5 trace width ladder, with the per-net floor
-9. §6 step 4: the portfolio router — then A only if that proves insufficient
+9. §6 C: make `MinAreaTree.node_stack` thread-local — a prerequisite for **all**
+   parallelism, and a latent bug regardless of it
+10. §6 step 4: the portfolio router — then A only if that proves insufficient
 
 Items 2 and 3 moved up: with reproducibility off the table, everything is judged
 by score, so the score has to exist and be trustworthy before the tuning work in
 4-6 can be told apart from noise.
+
+Item 9 is new and gates 10: there is currently no safe concurrent *read* of a
+search tree, so nothing parallel can be built or even prototyped before it lands.
