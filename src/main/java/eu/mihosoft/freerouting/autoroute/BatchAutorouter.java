@@ -292,6 +292,11 @@ public class BatchAutorouter
             return true;
         } catch (Exception e)
         {
+            // Swallowing this used to be silent: autoroute_pass() returning false is also what
+            // "board is completely routed" looks like, so a real bug here was indistinguishable
+            // from a normal, successful exit. Log it so the two cases can be told apart.
+            FRLogger.error("BatchAutorouter.autoroute_pass: exception in ripup pass " + p_pass_no
+                    + " on board '" + this.routing_board.get_hash() + "'", e);
             this.air_line = null;
             return false;
         }
@@ -378,6 +383,14 @@ public class BatchAutorouter
             return result;
         } catch (Exception e)
         {
+            // "false" here means exactly the same thing to every caller as a legitimate
+            // "no route found": every bug in the router used to be invisible, indistinguishable
+            // from a connection that is simply hard to route. Log the net and item so a thrown
+            // exception can be told apart from a real routing failure.
+            eu.mihosoft.freerouting.rules.Net route_net = routing_board.rules.nets.get(p_route_net_no);
+            String net_description = route_net == null ? ("net_no " + p_route_net_no) : (route_net.name + " (net_no " + p_route_net_no + ")");
+            FRLogger.error("BatchAutorouter.autoroute_item: exception routing item id " + p_item.get_id_no()
+                    + " on " + net_description + " in ripup pass " + p_ripup_pass_no, e);
             return false;
         }
     }
