@@ -339,12 +339,19 @@ public class MoveItemState extends InteractiveState
             {
                 components.move(curr_component.no, translate_vector);
             }
-            this.clearance_violations = new java.util.LinkedList<ClearanceViolation>();
             for (Item curr_item : this.item_list)
             {
                 curr_item.translate_by(translate_vector);
-                this.clearance_violations.addAll(curr_item.clearance_violations());
             }
+            // Build this through ClearanceViolations so the drag preview applies the same
+            // filtering as the toggled display and the verify report: one entry per item
+            // pair per layer, different nets only, overlaps above the rounding floor.
+            // Collecting raw Item.clearance_violations() here flagged every same-net pin
+            // and via stack in the moved selection as a violation.
+            //
+            // Also computed AFTER the whole selection has moved, not during: inside the
+            // loop each item was checked against siblings still at their old positions.
+            this.clearance_violations = new ClearanceViolations(this.item_list);
             previous_position = current_position;
             for (NetItems curr_net_items : this.net_items_list)
             {
@@ -381,12 +388,19 @@ public class MoveItemState extends InteractiveState
         {
             components.turn_90_degree(curr_component.no, p_factor, current_position);
         }
-        this.clearance_violations = new java.util.LinkedList<ClearanceViolation>();
         for (Item curr_item : this.item_list)
         {
             curr_item.turn_90_degree(p_factor,  current_position);
-            this.clearance_violations.addAll(curr_item.clearance_violations());
         }
+        // Build this through ClearanceViolations so the drag preview applies the same
+        // filtering as the toggled display and the verify report: one entry per item
+        // pair per layer, different nets only, overlaps above the rounding floor.
+        // Collecting raw Item.clearance_violations() here flagged every same-net pin
+        // and via stack in the moved selection as a violation.
+        //
+        // Also computed AFTER the whole selection has moved, not during: inside the
+        // loop each item was checked against siblings still at their old positions.
+        this.clearance_violations = new ClearanceViolations(this.item_list);
         for (NetItems curr_net_items : this.net_items_list)
         {
             this.hdlg.update_ratsnest(curr_net_items.net_no, curr_net_items.items);
@@ -410,13 +424,20 @@ public class MoveItemState extends InteractiveState
         {
             components.rotate(curr_component.no, p_angle_in_degree,  this.current_position);
         }
-        this.clearance_violations = new java.util.LinkedList<ClearanceViolation>();
         FloatPoint float_position = this.current_position.to_float();
         for (Item curr_item : this.item_list)
         {
             curr_item.rotate_approx(p_angle_in_degree,  float_position);
-            this.clearance_violations.addAll(curr_item.clearance_violations());
         }
+        // Build this through ClearanceViolations so the drag preview applies the same
+        // filtering as the toggled display and the verify report: one entry per item
+        // pair per layer, different nets only, overlaps above the rounding floor.
+        // Collecting raw Item.clearance_violations() here flagged every same-net pin
+        // and via stack in the moved selection as a violation.
+        //
+        // Also computed AFTER the whole selection has moved, not during: inside the
+        // loop each item was checked against siblings still at their old positions.
+        this.clearance_violations = new ClearanceViolations(this.item_list);
         for (NetItems curr_net_items : this.net_items_list)
         {
             this.hdlg.update_ratsnest(curr_net_items.net_no, curr_net_items.items);
@@ -487,12 +508,19 @@ public class MoveItemState extends InteractiveState
         {
             components.change_side(curr_component.no, current_position);
         }
-        this.clearance_violations = new java.util.LinkedList<ClearanceViolation>();
         for (Item curr_item : this.item_list)
         {
             curr_item.change_placement_side(current_position);
-            this.clearance_violations.addAll(curr_item.clearance_violations());
         }
+        // Build this through ClearanceViolations so the drag preview applies the same
+        // filtering as the toggled display and the verify report: one entry per item
+        // pair per layer, different nets only, overlaps above the rounding floor.
+        // Collecting raw Item.clearance_violations() here flagged every same-net pin
+        // and via stack in the moved selection as a violation.
+        //
+        // Also computed AFTER the whole selection has moved, not during: inside the
+        // loop each item was checked against siblings still at their old positions.
+        this.clearance_violations = new ClearanceViolations(this.item_list);
         for (NetItems curr_net_items : this.net_items_list)
         {
             this.hdlg.update_ratsnest(curr_net_items.net_no, curr_net_items.items);
@@ -594,7 +622,7 @@ public class MoveItemState extends InteractiveState
         if (this.clearance_violations != null)
         {
             java.awt.Color draw_color = hdlg.graphics_context.get_violations_color();
-            for (ClearanceViolation curr_violation : this.clearance_violations)
+            for (ClearanceViolation curr_violation : this.clearance_violations.list)
             {
                 hdlg.graphics_context.fill_area(curr_violation.shape, p_graphics, draw_color, 1);
             }
@@ -612,7 +640,7 @@ public class MoveItemState extends InteractiveState
     private IntPoint current_position;
     private IntPoint previous_position;
     
-    private Collection<ClearanceViolation> clearance_violations;
+    private ClearanceViolations clearance_violations;
     
     private final Collection<NetItems> net_items_list;
     
