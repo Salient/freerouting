@@ -255,10 +255,33 @@ have not profiled the serial case.
   exceptions rather than genuine routing failures, and that is a one-line
   change with a potentially large answer.
 
-**C. Parallelize the read-only work.** Low risk, no algorithm change:
-`ClearanceViolations` construction (pure per-item reads — also fixes §1),
-`calc_weighted_trace_length`, the search-tree bulk build at import. Do these
-opportunistically.
+**C. Parallelize the read-only work — NOT low risk, corrected.** This entry
+previously called `ClearanceViolations` construction "pure per-item reads" and
+therefore safe to parallelize opportunistically. **That was wrong**, and the
+reason matters for every other option here.
+
+`MinAreaTree.node_stack` (`datastructures/MinAreaTree.java:253`) is a `protected`
+**instance** field — one shared `ArrayStack<TreeNode>` used as scratch space by
+every search-tree *traversal*, including pure read paths. It is used by the base
+class (`:67-86`) and by all three tree variants:
+`board/ShapeSearchTree.java:668-728`,
+`board/ShapeSearchTree90Degree.java:90-154`,
+`board/ShapeSearchTree45Degree.java:103-172`.
+
+So two threads issuing read-only queries against the same `ShapeSearchTree`
+corrupt each other's traversal — silently, as wrong results or an
+`ArrayIndexOutOfBounds`, not a clean failure. `Item.clearance_violations()`
+(`board/Item.java:351-363`) reaches it through
+`overlapping_tree_entries_with_clearance`. There is no such thing as a safe
+concurrent *read* of these trees today.
+
+Making the scratch stack thread-local (or a local variable) is a small change
+across ~4 files, but it is a **prerequisite** for any parallel scheme, not a
+nicety — and it is a latent bug regardless of parallelism, because it silently
+couples any two traversals that interleave.
+
+The rest of the entry stands once that is fixed: `calc_weighted_trace_length` and
+the search-tree bulk build at import are then genuinely parallelizable.
 
 **E. Portfolio: K independent routers, keep the best board.** The user's own
 "run multiple instances", in its strongest form. Run K full routers on K copies
