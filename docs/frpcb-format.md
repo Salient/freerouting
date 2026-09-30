@@ -38,6 +38,12 @@ resolution/scale-factor step, unlike Specctra DSN. The importer converts once,
 at load time, using the same `dsn_to_board`-style scale factor freerouting
 already uses internally.
 
+The exporter also writes two top-level keys not listed above,
+`_board_outline_rules` and `_dropped_clearance_rules`. These are diagnostic
+only — `FrpcbFile` never reads them, and the importer ignores unknown
+top-level keys entirely, so their presence costs nothing on import. See
+"Diagnostic keys" under `clearance_matrix` below.
+
 ## `board`
 
 ```jsonc
@@ -87,6 +93,20 @@ internal model, the outline itself cannot vary per layer — only keepouts can.
 ]
 ```
 
+Each layer's shape has one of exactly three `type`s — `circle` (`diameter`),
+`rect` (`width`/`height`), or `polygon` (`points`, a convex ring of `[x,y]`
+offsets from the pad/via origin) — matching the only three cases
+`FrpcbFile.read_shape` recognizes; anything else is logged and that layer's
+shape is dropped. There is no `octagon` or `oval` type. Altium's octagonal
+pads, and its rounded pads whose two extents differ (a "stadium", not a
+circle — round only when both extents are equal), are exported as an
+explicit `polygon`: an 8-point inscribed octagon, or two 6-point semicircular
+caps joined into a capsule, both already rotated (`WriteRoundedPolygon` in
+`ExportFrpcb.pas`, added in commit `fd95cbfe`). Before that commit, octagonal
+pads were written with the literal `type` value `"octagon"`, which
+`read_shape` rejects as unknown — the pad ended up with no copper at all and
+its pin was silently dropped from the net.
+
 A padstack with an empty/absent `shapes` object is a **shapeless padstack**
 (mounting hole, NPTH, fiducial) — the importer registers it exactly as the
 DSN parser now does (`Library.read_padstack_scope`'s null-shape-array path),
@@ -117,6 +137,32 @@ shapeless-padstack handling is kept anyway — as defense in depth for the
 genuine NPTH/mounting-hole/fiducial case, and in case a future capture path
 ever again passes through a lossy export step.
 
+### The via padstack naming contract — get this wrong and vias vanish silently
+
+`ExportFrpcb.pas` does not give vias a human-chosen padstack name. It
+synthesizes one from geometry: `'via_' + CoordMils(Via.Size) + '_' +
+CoordMils(Via.HoleSize)` (outer size, then hole size, both in mils). This
+exact expression is repeated verbatim at every place a via needs to name its
+padstack: `WritePadstacks` (which defines the padstack entry itself, one per
+distinct size/hole pair actually used on the board), `WriteViaRules` (the
+named entries under `vias`, below), and `WriteRouting` (each routed via under
+`routing.vias`). All three must produce the identical string for a given via,
+because `FrpcbFile` resolves `"padstack"` by exact name lookup
+(`read_via`/`read_routed_via` against the `padstacks` map built by
+`read_padstack`) — there is no fallback and no geometric matching.
+
+If a referenced padstack name is not in the `padstacks` array — e.g. because
+a hand-edited or partially-regenerated file added a routed via without a
+matching padstack entry — `read_routed_via` logs a warning
+(`"references unknown padstack ..., skipping it"`) and drops that one via.
+The import still succeeds; nothing else fails. This is the confirmed failure
+mode noted in `ExportFrpcb.pas`'s `WritePadstacks`: before it emitted a
+padstack entry per via size/hole combination, a live board's export silently
+lost about 1000 vias this way, discoverable only by noticing the warning
+count or the missing copper, not by any import error. The same exact-name
+requirement applies to a component pin's `"padstack"` field
+(`read_component`) and to a named via rule's `"padstack"` field (`read_via`).
+
 ## `components`
 
 ```jsonc
@@ -139,6 +185,19 @@ Maps to `board.Component` (location/rotation/side/fixed) and its `Package`'s
 pin list; each pin resolves its padstack by name against the `padstacks`
 array, mirroring `Network.insert_component`. A pin whose padstack is
 shapeless is skipped exactly as `a9878d08e` already handles for DSN.
+
+`package` is documentation only, unlike Specctra DSN's library `image` scope.
+DSN parses one `image` per distinct footprint and has every placement of it
+share that one `Package`; FRPCB's importer deliberately does *not* do this —
+`read_component` builds and registers a fresh `Package` per component,
+keyed by `package + "#" + component name`, never shared across components
+even when they quote the same `package` string. Each component's own `pins`
+array is the sole authority for that instance's pin/padstack/net data, which
+matters because two components can share a nominal package name while
+differing per pin (e.g. fiducials that all say `"FIDUCIAL_200X100"` but carry
+different per-instance padstacks). An earlier version cached `Package` by
+`package` name alone; the second component with a given name then silently
+reused the first one's pin/padstack data.
 
 ## `nets`
 
@@ -176,7 +235,16 @@ internal `NetClass` instead of minting one per net).
 Maps 1:1 to `rules.NetClass` — width/clearance/via-rule/min-max-length/
 active-layers/pull-tight/shove-fixed are all representable per the model
 survey. `clearance` here is the class's **self**-clearance; cross-class
-values go in `clearance_matrix`.
+values go in `clearance_matrix`. `min_length`/`max_length` are only applied
+when present and greater than 0. `via` is resolved by name against the
+`vias` array; an unknown name is logged and the class is left without a via
+rule.
+
+Omitting `active_layers` leaves every layer active (the class's default).
+Including it switches the class to an explicit allow-list: every layer
+starts inactive and only the named ones are turned on, so an unknown layer
+name in the array is logged and simply contributes nothing — it does not
+fall back to "all layers".
 
 ## `clearance_matrix` — the gap this format exists to close
 
@@ -246,6 +314,57 @@ For the same reason a class's clearance row is bound with both
 `default_item_clearance_classes.set_all`: every inserted item reads the latter,
 so setting only the former leaves all copper on the default class.
 
+### Diagnostic keys: `_board_outline_rules` and `_dropped_clearance_rules`
+
+The exporter writes two additional top-level arrays purely so a human can see
+what it could not carry into the format proper. `FrpcbFile` never reads
+either one — unknown top-level keys are simply ignored on import — so they
+are safe to leave in a file, and safe to strip.
+
+```jsonc
+"_board_outline_rules": [
+  { "rule": "BoardOutlineClearance", "scope": "All", "clearance": 10.0,
+    "priority": 4, "enabled": true },
+  { "rule": "ChassisOutline", "scope": "(Not InNet('CHASSIS'))",
+    "clearance": 100.0, "priority": 2, "enabled": true }
+],
+"_dropped_clearance_rules": [
+  { "rule": "PadToPad", "scope1": "IsPad", "scope2": "IsPad",
+    "clearance": 7.8,
+    "reason": "no net class on either side; freerouting has no object-type clearance scope" }
+]
+```
+
+`_board_outline_rules` lists **every** `PCB_Rule` of Altium's board-outline-
+clearance kind found on the board, whether or not it ended up governing
+`board.outline_clearance` — `rule`/`scope` are the rule's name and
+`Scope1Expression`, `clearance` its `Gap` in the file's unit, `priority` its
+Altium rule priority (1 highest), and `enabled` its `Rule.Enabled` flag
+(defaulting to `true` if the property can't be read). This is the audit
+trail for the single value picked for `board.outline_clearance`: since FRPCB
+can only carry one board-edge clearance, the exporter has to pick exactly
+one governing rule among possibly several overlapping ones, and does so by
+Altium's own conflict-resolution rule — the highest-priority *enabled* rule
+whose scope actually covers general copper (excluding a scope that names one
+specific net, or a non-copper text scope) — rather than by simply taking the
+largest `Gap` among all matching rules. On the reference board four enabled
+rules overlapped at priorities 1–4 with gaps of 0, 10, 10 and 100 mil;
+getting this selection wrong (by scope alone, by gap alone, or by an
+incomplete priority rule) was the source of several iterations of a several-
+hundred-violation over- or under-report before landing on the current
+scope-and-priority logic.
+
+`_dropped_clearance_rules` lists enabled `eRule_Clearance` rules this format
+cannot represent at all: a nonzero `Gap` whose two scopes are neither a
+net-scoped rule (which becomes a synthetic single-net class instead, see
+above) nor the board's own default `All`/`All` scope. `reason` is currently
+always the same string, `"no net class on either side; freerouting has no
+object-type clearance scope"` — object-type scopes such as pad-to-pad or
+via-to-pad have no representation anywhere in
+`eu.mihosoft.freerouting.rules`, which is the same limitation the
+`OBJECTCLEARANCES` entry under "Deliberately excluded" describes for
+`Constraints.xml`.
+
 ## `vias`
 
 ```jsonc
@@ -255,7 +374,12 @@ so setting only the former leaves all copper on the default class.
 ```
 
 Maps to `ViaRule`/`ViaInfo` (name, padstack, clearance class). Referenced by
-name from `net_classes[].via`.
+name from `net_classes[].via`. `padstack` is resolved by exact name against
+`padstacks` — see "The via padstack naming contract" above; an unresolved
+name causes the whole via entry to be skipped. `clearance_class` is
+optional: omitted, or a name not found in the clearance matrix, falls back
+to `BoardRules.default_clearance_class()` (the latter case also logs a
+warning) rather than failing the via.
 
 
 ## `pours`
@@ -298,6 +422,13 @@ Altium already has that should be protected from the autorouter, and (b) the
 reverse direction: freerouting emits this same `routing` block standalone
 after autorouting, for a script on the Altium side to place tracks/vias via
 `PCBServer.PCBObjectFactory(eTrackObject, ...)`.
+
+`fixed` is matched case-insensitively against the four values shown above;
+anything else (including a missing field) is treated as `"unfixed"` rather
+than rejected. `routing.vias[].padstack` is resolved the same way as
+`vias[].padstack` — by exact name against `padstacks` — and is subject to
+the same silent-skip-on-mismatch failure mode described in "The via padstack
+naming contract" under `padstacks` above.
 
 ### `-rm`: what to do with the routing already in the file
 
