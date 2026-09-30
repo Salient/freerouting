@@ -114,8 +114,17 @@ public class BatchAutorouterThread extends InteractiveActionThread
                     curr_message = resources.getString("completed");
                 }
                 Integer incomplete_count = hdlg.get_ratsnest().incomplete_count();
+                int blocked_count = this.batch_autorouter.get_blocked_connection_count();
                 String end_message = resources.getString("autoroute") + " " + curr_message + ", " + incomplete_count.toString() +
                         " " + resources.getString("connections_not_found");
+                if (blocked_count > 0)
+                {
+                    // Surfaces the "impossible routes have been identified" count in the GUI, in
+                    // the same status field that already reports the plain not-found count above
+                    // rather than adding a new field (add_field/layer_field are contended during
+                    // routing; this end-of-run status message is not).
+                    end_message += " (" + blocked_count + " provably unroutable, see log)";
+                }
                 hdlg.screen_messages.set_status_message(end_message);
             }
 
@@ -125,7 +134,19 @@ public class BatchAutorouterThread extends InteractiveActionThread
             // around its postroute pass.
             hdlg.remove_ratsnest();
             int final_incomplete_count = hdlg.get_ratsnest().incomplete_count();
-            BoardScore.of(hdlg.get_routing_board(), final_incomplete_count).log("Batch run result");
+            int final_blocked_count = this.batch_autorouter.get_blocked_connection_count();
+            BoardScore.of(hdlg.get_routing_board(), final_incomplete_count, final_blocked_count).log("Batch run result");
+            // Repeated-failure visibility asked for by the task: NOT a give-up rule (see
+            // BatchAutorouter.not_routed_pass_counts' javadoc for why ripup freedom growing with
+            // the pass number means this is not proof of impossibility), just a count so a human
+            // can see which connections are struggling across passes.
+            int repeatedly_failed_count = this.batch_autorouter.get_repeatedly_failed_connection_count(3);
+            if (repeatedly_failed_count > 0)
+            {
+                FRLogger.warn(repeatedly_failed_count + " connection(s) failed to route on 3 or more passes"
+                        + " without being proven unroutable; ripup freedom grows with the pass"
+                        + " number, so they are still being retried, not skipped.");
+            }
             // The last pass number BatchAutorouter.autoroute_passes() recorded is exactly the
             // value -sp expects to resume with the same ripup-cost weights (NOT a checkpoint --
             // the board itself is whatever the next run's -de loads).

@@ -79,6 +79,7 @@ public class BatchFanout
         int routed_count = 0;
         int not_routed_count = 0;
         int insert_error_count = 0;
+        int blocked_count = 0;
         int ripup_costs = this.thread.hdlg.get_settings().autoroute_settings.get_start_ripup_costs() * (p_pass_no + 1);
         for (Component curr_component : this.sorted_components)
         {
@@ -102,6 +103,15 @@ public class BatchFanout
                 {
                     ++insert_error_count;
                 }
+                else if (curr_result == AutorouteEngine.AutorouteResult.BLOCKED)
+                {
+                    // Proven unroutable before the search even ran (see AutorouteResult.BLOCKED).
+                    // Counted separately from NOT_ROUTED so the summary line below does not
+                    // conflate "the search tried and failed this pass" with "provably
+                    // impossible", even though fanout (unlike BatchAutorouter.autoroute_pass)
+                    // has no permanent-skip registry and will still retry this pin next pass.
+                    ++blocked_count;
+                }
                 if (curr_result != AutorouteEngine.AutorouteResult.NOT_ROUTED)
                 {
                     this.thread.hdlg.repaint();
@@ -116,7 +126,8 @@ public class BatchFanout
         if (this.routing_board.get_test_level() != eu.mihosoft.freerouting.board.TestLevel.RELEASE_VERSION)
         {
             FRLogger.warn("fanout pass: " + (p_pass_no + 1) + ", routed: " + routed_count
-                    + ", not routed: " + not_routed_count + ", errors: " + insert_error_count);
+                    + ", not routed: " + not_routed_count + ", errors: " + insert_error_count
+                    + ", provably blocked: " + blocked_count);
         }
         return routed_count;
     }

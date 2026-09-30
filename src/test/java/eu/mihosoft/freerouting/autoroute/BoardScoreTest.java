@@ -83,6 +83,37 @@ public class BoardScoreTest
     }
 
     @Test
+    public void blocked_count_defaults_to_zero_on_the_pre_existing_overloads()
+    {
+        // Callers written before blocked_count existed (e.g. BatchOptRoute) must keep compiling
+        // and keep reporting 0, not some uninitialized/garbage value.
+        BoardScore four_arg = BoardScore.of(5, 2, 100.0, 0);
+        assertEquals(0, four_arg.blocked_count);
+    }
+
+    @Test
+    public void blocked_count_never_affects_the_comparison()
+    {
+        // Same incomplete/via/length, different blocked_count: still a tie. blocked_count is a
+        // reported-only subset of incomplete_count (see its field javadoc), so counting it in
+        // compareTo too would double-weight the same incompletes.
+        BoardScore none_blocked = BoardScore.of(3, 4, 500.0, 0, 0);
+        BoardScore some_blocked = BoardScore.of(3, 4, 500.0, 0, 3);
+        assertEquals(0, none_blocked.compareTo(some_blocked));
+        assertFalse(none_blocked.is_better_than(some_blocked));
+        assertFalse(some_blocked.is_better_than(none_blocked));
+    }
+
+    @Test
+    public void blocked_count_is_reported_verbatim()
+    {
+        BoardScore score = BoardScore.of(6, 1, 10.0, 0, 4);
+        assertEquals(4, score.blocked_count);
+        assertEquals(6, score.incomplete_count);
+        assertTrue(score.toString().contains("4"));
+    }
+
+    @Test
     public void matches_the_original_inline_expression()
     {
         int[] incompletes = {0, 1, 2, 5};
