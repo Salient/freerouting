@@ -129,10 +129,22 @@ public class BatchAutorouterThread extends InteractiveActionThread
             // The last pass number BatchAutorouter.autoroute_passes() recorded is exactly the
             // value -sp expects to resume with the same ripup-cost weights (NOT a checkpoint --
             // the board itself is whatever the next run's -de loads).
-            int last_pass_no = hdlg.get_settings().autoroute_settings.get_start_pass_no();
-            FRLogger.info("Last recorded ripup pass number: " + last_pass_no
-                    + ". Resume with -sp " + last_pass_no + " for the same ripup-cost weights"
-                    + (this.is_stop_requested() ? " (this run was interrupted, so that pass may be incomplete)." : "."));
+            // Report the last pass the MAIN loop ran, not autoroute_settings.start_pass_no.
+            // That field is shared, and BatchOptRoute advances it once per re-routed item during
+            // postroute, so by now it is far past where routing actually got to. Resuming from
+            // the inflated value would set ripup costs many times more aggressive than the run
+            // ever used, which is the opposite of "carry on from where it stopped".
+            int last_pass_no = this.batch_autorouter.get_last_main_pass_no();
+            if (last_pass_no > 0)
+            {
+                FRLogger.info("Last completed ripup pass: " + last_pass_no
+                        + ". Resume with -sp " + last_pass_no + " for the same ripup-cost weights"
+                        + (this.is_stop_requested() ? " (this run was interrupted, so that pass may be incomplete)." : "."));
+            }
+            else
+            {
+                FRLogger.info("No ripup pass completed, so there is nothing to resume from with -sp.");
+            }
 
             hdlg.set_board_read_only(saved_board_read_only);
             hdlg.update_ratsnest();

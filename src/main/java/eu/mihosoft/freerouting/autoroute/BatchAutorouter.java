@@ -147,6 +147,7 @@ public class BatchAutorouter
             FRLogger.traceEntry("BatchAutorouter.autoroute_pass #"+curr_pass_no+" on board '"+current_board_hash+"' making {} changes");
             already_checked_board_hashes.add(this.routing_board.get_hash());
             still_unrouted_items = autoroute_pass(curr_pass_no, true);
+            this.last_main_pass_no = curr_pass_no;
 
             // let's check if there was enough change in the last pass, because if it were little, so should probably stop
             int newTraceDifferences = this.routing_board.diff_traces(boardBefore);
@@ -449,6 +450,25 @@ public class BatchAutorouter
     private final boolean remove_unconnected_vias;
     private final AutorouteControl.ExpansionCostFactor[] trace_cost_arr;
     private final boolean retain_autoroute_database;
+    /**
+     * The last pass number the main loop above actually executed, or -1 if none did.
+     *
+     * <p>Tracked separately because AutorouteSettings.start_pass_no is SHARED, and
+     * BatchOptRoute advances it once per re-routed item through
+     * autoroute_passes_for_optimizing_item. So by the end of a run that included postroute,
+     * the shared counter is far past the main loop's last pass -- 49 after two real passes on
+     * one sample board, 1516 on another. Reporting that as the number to resume from would
+     * suggest ripup costs 24x more aggressive than the routing had actually reached, since
+     * autoroute_item multiplies start_ripup_costs by the pass number.
+     */
+    private int last_main_pass_no = -1;
+
+    /** See last_main_pass_no. Returns -1 if the main loop never ran a pass. */
+    public int get_last_main_pass_no()
+    {
+        return this.last_main_pass_no;
+    }
+
     private final int start_ripup_costs;
     /** Used to draw the airline of the current routed incomplete. */
     private FloatLine air_line = null;
