@@ -53,6 +53,10 @@ public class StartupOptions {
     // outermost signal layers. 0 (default) reproduces today's behaviour exactly -- see
     // AutorouteSettings.get_outer_layer_trace_cost_factor / get_outer_via_cost_factor.
     int inner_layer_preference = 0;
+    // -vr: 0-100, how much extra effort BatchOptRoute's postroute pass should spend trying to
+    // reduce via count (raises AutorouteSettings.via_costs during postroute only). 0 (default)
+    // is a no-op -- see AutorouteSettings.get_via_cost_boost_factor.
+    int via_reduction_effort = 0;
     // Wall-clock limit for headless batch autorouting, in seconds. <= 0 means no
     // limit (route until the autorouter finishes or the pass cap is reached).
     int max_seconds = 0;
@@ -133,6 +137,12 @@ public class StartupOptions {
                     // ahead of any future "-i*" flag that could be a prefix of this one.
                     if (p_args.length > i + 1 && !p_args[i + 1].startsWith("-")) {
                         inner_layer_preference = Integer.decode(p_args[i + 1]);
+                    }
+                } else if (p_args[i].startsWith("-vr")) {
+                    // via reduction effort, 0-100; see AutorouteSettings for what it does. No
+                    // existing flag starts with "-v", so ordering here is not load-bearing.
+                    if (p_args.length > i + 1 && !p_args[i + 1].startsWith("-")) {
+                        via_reduction_effort = Integer.decode(p_args[i + 1]);
                     }
                 } else if (p_args[i].startsWith("-sp")) {
                     // Must be checked before "-s" below: "-sp".startsWith("-s") is true, so if

@@ -116,6 +116,7 @@ public class AutorouteSettings implements java.io.Serializable
         via_costs = p_settings.via_costs;
         plane_via_costs = p_settings.plane_via_costs;
         inner_layer_preference = p_settings.inner_layer_preference;
+        via_reduction_effort = p_settings.via_reduction_effort;
         layer_active_arr = new boolean[p_settings.layer_active_arr.length];
         System.arraycopy(p_settings.layer_active_arr, 0, this.layer_active_arr, 0, layer_active_arr.length);
         preferred_direction_is_horizontal_arr = new boolean[p_settings.preferred_direction_is_horizontal_arr.length];
@@ -225,6 +226,32 @@ public class AutorouteSettings implements java.io.Serializable
     {
         return plane_via_costs;
     }
+
+    public void set_via_reduction_effort(int p_value)
+    {
+        via_reduction_effort = Math.max(0, Math.min(100, p_value));
+    }
+
+    /** 0 (today's default: no extra effort) to 100 (strongest via reduction effort). */
+    public int get_via_reduction_effort()
+    {
+        return via_reduction_effort;
+    }
+
+    /**
+     * Multiplier BatchOptRoute applies to via_costs during its postroute pass only (the main
+     * autoroute phase and the interactive router are unaffected). 1.0 (no effect) at effort 0,
+     * rising linearly to 1.0 + VIA_REDUCTION_BOOST_AT_MAX at effort 100. Higher via costs make
+     * the maze search itself avoid vias more; combined with the accept-if-fewer-vias rule
+     * BoardScore already encodes, that is the direct lever for reducing via count.
+     */
+    public double get_via_cost_boost_factor()
+    {
+        return 1.0 + (via_reduction_effort / 100.0) * VIA_REDUCTION_BOOST_AT_MAX;
+    }
+
+    /** How much the postroute via cost boost factor can grow by at effort 100 (see above). */
+    private static final double VIA_REDUCTION_BOOST_AT_MAX = 3.0;
 
     public void set_layer_active(int p_layer, boolean p_value)
     {
@@ -415,6 +442,8 @@ public class AutorouteSettings implements java.io.Serializable
     private int plane_via_costs;
     /** 0-100; see get_outer_layer_trace_cost_factor / get_outer_via_cost_factor. Default 0 is a no-op. */
     private int inner_layer_preference = 0;
+    /** 0-100; see get_via_cost_boost_factor. Default 0 is a no-op. */
+    private int via_reduction_effort = 0;
     private int start_ripup_costs;
     private int start_pass_no;
     private int stop_pass_no;

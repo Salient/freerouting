@@ -45,6 +45,10 @@ Application options (see docs/frpcb-format.md)
                   loaded, nothing about routed state is saved or resumed. Every batch run logs
                   "Last recorded ripup pass number: N" at the end; pass that N back in here to
                   continue with the same ripup-cost schedule on a later run.
+  -vr N           Via reduction effort, 0-100. 0 (default) is a no-op; higher values raise
+                  via_costs during the postroute pass only, making the maze search avoid vias
+                  more so more re-routes come out with fewer of them. Requires postroute to be
+                  enabled (it is, by default).
 
 Run ./freerouting -de board.frpcb.json -rm verify -do report.txt before -rm
 finish: finish makes existing copper unfixable, so a violation already present

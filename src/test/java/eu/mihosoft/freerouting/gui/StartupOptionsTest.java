@@ -75,4 +75,28 @@ public class StartupOptionsTest
         StartupOptions options = StartupOptions.parse(new String[]{"-de", "board.dsn"});
         assertEquals(0, options.inner_layer_preference);
     }
+
+    @Test
+    public void vr_alone_sets_via_reduction_effort()
+    {
+        StartupOptions options = StartupOptions.parse(new String[]{"-vr", "77"});
+        assertEquals(77, options.via_reduction_effort);
+    }
+
+    @Test
+    public void via_reduction_effort_defaults_to_zero()
+    {
+        StartupOptions options = StartupOptions.parse(new String[]{"-de", "board.dsn"});
+        assertEquals(0, options.via_reduction_effort);
+    }
+
+    @Test
+    public void il_sp_and_vr_together_do_not_shadow_each_other()
+    {
+        StartupOptions options = StartupOptions.parse(new String[]{"-il", "10", "-vr", "20", "-sp", "3", "-s"});
+        assertEquals(10, options.inner_layer_preference);
+        assertEquals(20, options.via_reduction_effort);
+        assertEquals(3, options.start_pass_no);
+        assertTrue(options.session_file_option);
+    }
 }

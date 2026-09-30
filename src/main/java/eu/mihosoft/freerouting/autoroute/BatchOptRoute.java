@@ -31,7 +31,9 @@ import eu.mihosoft.freerouting.board.Via;
 import eu.mihosoft.freerouting.board.Trace;
 import eu.mihosoft.freerouting.board.RoutingBoard;
 
+import eu.mihosoft.freerouting.interactive.AutorouteSettings;
 import eu.mihosoft.freerouting.interactive.InteractiveActionThread;
+import eu.mihosoft.freerouting.logger.FRLogger;
 
 /**
  * To optimize the vias and traces after the batch autorouter has completed the board.
@@ -63,15 +65,45 @@ public class BatchOptRoute
         this.thread.hdlg.remove_ratsnest();
         int incomplete_count_before_optimize = this.thread.hdlg.get_ratsnest().incomplete_count();
         BoardScore.of(routing_board, incomplete_count_before_optimize).log("Before postroute optimize");
-        boolean route_improved = true;
-        int curr_pass_no = 0;
-        use_increased_ripup_costs = true;
 
-        while (route_improved)
+        // Via reduction effort: raise via_costs for postroute only. Higher via costs make the
+        // maze search itself avoid vias more; combined with opt_route_item's accept-if-fewer-
+        // vias rule (now BoardScore.is_better_than), that is the direct lever for reducing via
+        // count. Restored in a finally block: via_costs is shared, global AutorouteSettings
+        // state also read by the main autoroute phase and the interactive router, so this must
+        // not leak a permanent change beyond this method. At effort 0 the factor is exactly
+        // 1.0, so this is a no-op (boosted_via_costs == base_via_costs, the set/restore pair is
+        // skipped entirely).
+        AutorouteSettings autoroute_settings = this.thread.hdlg.get_settings().autoroute_settings;
+        int base_via_costs = autoroute_settings.get_via_costs();
+        int boosted_via_costs = (int) Math.round(base_via_costs * autoroute_settings.get_via_cost_boost_factor());
+        boolean via_costs_boosted = boosted_via_costs != base_via_costs;
+        if (via_costs_boosted)
         {
-            ++curr_pass_no;
-            boolean with_prefered_directions = (curr_pass_no % 2 != 0); // to create more variations
-            route_improved = opt_route_pass(curr_pass_no, with_prefered_directions);
+            FRLogger.info("Via reduction effort = " + autoroute_settings.get_via_reduction_effort()
+                    + "/100: raising via_costs from " + base_via_costs + " to " + boosted_via_costs
+                    + " for postroute only.");
+            autoroute_settings.set_via_costs(boosted_via_costs);
+        }
+        try
+        {
+            boolean route_improved = true;
+            int curr_pass_no = 0;
+            use_increased_ripup_costs = true;
+
+            while (route_improved)
+            {
+                ++curr_pass_no;
+                boolean with_prefered_directions = (curr_pass_no % 2 != 0); // to create more variations
+                route_improved = opt_route_pass(curr_pass_no, with_prefered_directions);
+            }
+        }
+        finally
+        {
+            if (via_costs_boosted)
+            {
+                autoroute_settings.set_via_costs(base_via_costs);
+            }
         }
 
         this.thread.hdlg.remove_ratsnest();

@@ -109,6 +109,21 @@ public class WindowAutorouteDetailParameter extends BoardSavableSubWindow
         gridbag.setConstraints(inner_layer_preference_field, gridbag_constraints);
         main_panel.add(inner_layer_preference_field);
 
+        // add label and number field for the via reduction effort.
+
+        gridbag_constraints.gridwidth = 2;
+        javax.swing.JLabel via_reduction_effort_label = new javax.swing.JLabel(resources.getString("via_reduction_effort"));
+        gridbag.setConstraints(via_reduction_effort_label, gridbag_constraints);
+        main_panel.add(via_reduction_effort_label);
+
+        via_reduction_effort_field = new javax.swing.JFormattedTextField(number_format);
+        via_reduction_effort_field.setColumns(3);
+        this.via_reduction_effort_field.addKeyListener(new ViaReductionEffortFieldKeyListener());
+        this.via_reduction_effort_field.addFocusListener(new ViaReductionEffortFieldFocusListener());
+        gridbag_constraints.gridwidth = java.awt.GridBagConstraints.REMAINDER;
+        gridbag.setConstraints(via_reduction_effort_field, gridbag_constraints);
+        main_panel.add(via_reduction_effort_field);
+
         // add label and number field for the start ripup costs.
 
         gridbag_constraints.gridwidth = 2;
@@ -230,6 +245,7 @@ public class WindowAutorouteDetailParameter extends BoardSavableSubWindow
         this.start_ripup_costs.setValue(settings.get_start_ripup_costs());
         this.start_pass_no.setValue(settings.get_start_pass_no());
         this.inner_layer_preference_field.setValue(settings.get_inner_layer_preference());
+        this.via_reduction_effort_field.setValue(settings.get_via_reduction_effort());
         for (int i = 0; i < preferred_direction_trace_cost_arr.length; ++i)
         {
             this.preferred_direction_trace_cost_arr[i].setValue(settings.get_preferred_direction_trace_costs(layer_structure.get_layer_no(i)));
@@ -245,6 +261,7 @@ public class WindowAutorouteDetailParameter extends BoardSavableSubWindow
     private final javax.swing.JFormattedTextField start_ripup_costs;
     private final javax.swing.JFormattedTextField start_pass_no;
     private final javax.swing.JFormattedTextField inner_layer_preference_field;
+    private final javax.swing.JFormattedTextField via_reduction_effort_field;
     private final javax.swing.JComboBox<String> speed_combo_box;
     private final String speed_fast;
     private final String speed_slow;
@@ -255,6 +272,7 @@ public class WindowAutorouteDetailParameter extends BoardSavableSubWindow
     private boolean plane_via_cost_input_completed = true;
     private boolean start_ripup_cost_input_completed = true;
     private boolean inner_layer_preference_input_completed = true;
+    private boolean via_reduction_effort_input_completed = true;
     private final boolean[] preferred_direction_trace_costs_input_completed;
     private final boolean[] against_preferred_direction_trace_costs_input_completed;
 
@@ -502,6 +520,51 @@ public class WindowAutorouteDetailParameter extends BoardSavableSubWindow
             if (!inner_layer_preference_input_completed)
             {
                 inner_layer_preference_input_completed = true;
+                refresh();
+            }
+        }
+
+        public void focusGained(java.awt.event.FocusEvent p_evt)
+        {
+        }
+    }
+
+    private class ViaReductionEffortFieldKeyListener extends java.awt.event.KeyAdapter
+    {
+
+        public void keyTyped(java.awt.event.KeyEvent p_evt)
+        {
+            if (p_evt.getKeyChar() == '\n')
+            {
+                int old_value = board_handling.settings.autoroute_settings.get_via_reduction_effort();
+                Object input = via_reduction_effort_field.getValue();
+                int input_value;
+                if (input instanceof Number)
+                {
+                    input_value = ((Number) input).intValue();
+                } else
+                {
+                    input_value = old_value;
+                }
+                board_handling.settings.autoroute_settings.set_via_reduction_effort(input_value);
+                // set_via_reduction_effort clamps to [0, 100]; reflect the clamped value back.
+                via_reduction_effort_field.setValue(board_handling.settings.autoroute_settings.get_via_reduction_effort());
+                via_reduction_effort_input_completed = true;
+            } else
+            {
+                via_reduction_effort_input_completed = false;
+            }
+        }
+    }
+
+    private class ViaReductionEffortFieldFocusListener implements java.awt.event.FocusListener
+    {
+
+        public void focusLost(java.awt.event.FocusEvent p_evt)
+        {
+            if (!via_reduction_effort_input_completed)
+            {
+                via_reduction_effort_input_completed = true;
                 refresh();
             }
         }
