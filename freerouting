@@ -13,6 +13,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 jar="$here/build/libs/freerouting-executable.jar"
 do_build=yes
+force_headless=no
 
 usage() {
     cat <<'USAGE'
@@ -21,6 +22,10 @@ Usage: ./freerouting [wrapper options] [application options]
 Wrapper options
   --no-build      Use the existing jar even if the sources are newer.
   --rebuild       Force a rebuild before launching.
+  --headless      Run on a throwaway virtual display even when a real one is
+                  available, so the window never appears and never steals
+                  keyboard focus. Use this for test and batch runs. Requires
+                  xvfb-run.
   -h, --help      This message.
 
 Application options (see docs/frpcb-format.md)
@@ -61,6 +66,7 @@ for arg in "$@"; do
     case "$arg" in
         --no-build) do_build=no ;;
         --rebuild)  do_build=force ;;
+        --headless) force_headless=yes ;;
         -h|--help)  usage; exit 0 ;;
         *)          app_args+=("$arg") ;;
     esac
@@ -100,6 +106,24 @@ cp "$jar" "$run_jar"
 # modes -- -de/-rm still construct a BoardFrame. Under WSLg DISPLAY is already
 # set; over a plain ssh session it is not, so fall back to a virtual display,
 # which is what makes -rm verify usable from a terminal or from CI.
+# --headless takes the virtual-display path unconditionally. Under WSLg DISPLAY and
+# WAYLAND_DISPLAY are both set, so the automatic fallback below never triggers and a
+# batch run pops a real window that takes keyboard focus -- typing into another window
+# then gets delivered to freerouting instead. There is no true headless mode to use
+# instead: the batch paths still construct a Swing BoardFrame, so a display has to
+# exist even though nobody looks at it.
+if [[ "$force_headless" == yes ]]; then
+    if ! command -v xvfb-run >/dev/null 2>&1; then
+        echo "freerouting: --headless needs xvfb-run, which is not installed." >&2
+        echo "             Install it (apt install xvfb) or drop --headless." >&2
+        exit 1
+    fi
+    # Not exec: that would replace this shell and the EXIT trap would never remove the
+    # jar snapshot.
+    xvfb-run -a java -jar "$run_jar" "${app_args[@]+"${app_args[@]}"}"
+    exit $?
+fi
+
 if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
     if command -v xvfb-run >/dev/null 2>&1; then
         # Not exec: that would replace this shell and the EXIT trap would never remove the
