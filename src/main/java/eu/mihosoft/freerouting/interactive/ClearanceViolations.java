@@ -26,15 +26,17 @@ package eu.mihosoft.freerouting.interactive;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedList;
-import java.util.Iterator;
 import java.util.Set;
 
 import java.awt.Graphics;
+import java.awt.Rectangle;
 
 import eu.mihosoft.freerouting.boardgraphics.GraphicsContext;
 
 import eu.mihosoft.freerouting.board.Item;
 import eu.mihosoft.freerouting.board.ClearanceViolation;
+import eu.mihosoft.freerouting.geometry.planar.FloatPoint;
+import eu.mihosoft.freerouting.geometry.planar.IntBox;
 
 /**
  * To display the clearance violations between items on the screen.
@@ -128,18 +130,49 @@ public class ClearanceViolations
 
     public void draw(Graphics p_graphics, GraphicsContext p_graphics_context)
     {
-         java.awt.Color draw_color = p_graphics_context.get_violations_color();
-         Iterator<ClearanceViolation> it = list.iterator();
-         while (it.hasNext())
-         {
-             ClearanceViolation curr_violation = it.next();
-             double intensity = p_graphics_context.get_layer_visibility(curr_violation.layer);
-             p_graphics_context.fill_area(curr_violation.shape, p_graphics, draw_color, intensity);
-             // draw a circle around the violation.
-             double draw_radius = curr_violation.first_item.board.rules.get_min_trace_half_width() * 5;
-             p_graphics_context.draw_circle(curr_violation.shape.centre_of_gravity(), draw_radius,  0.1 * draw_radius, draw_color,
-             p_graphics, intensity);
-         }
+        java.awt.Color draw_color = p_graphics_context.get_violations_color();
+
+        // Clip bounds for viewport culling. p_graphics.getClip() can legitimately be null
+        // (nothing set), in which case we just draw everything, as before.
+        java.awt.Shape clip = p_graphics.getClip();
+        IntBox clip_box = null;
+        if (clip != null)
+        {
+            Rectangle clip_shape = clip.getBounds();
+            clip_box = p_graphics_context.coordinate_transform.screen_to_board(clip_shape);
+        }
+
+        for (ClearanceViolation curr_violation : list)
+        {
+            double intensity = p_graphics_context.get_layer_visibility(curr_violation.layer);
+            if (intensity <= 0)
+            {
+                // Hidden layer: nothing would actually show, so don't do the work either.
+                continue;
+            }
+
+            FloatPoint centre = curr_violation.shape.centre_of_gravity();
+            double draw_radius = curr_violation.first_item.board.rules.get_min_trace_half_width() * 5;
+
+            if (clip_box != null)
+            {
+                // The drawn extent is the shape itself plus the circle of draw_radius around
+                // its centroid, so cull against the union of both -- culling against just the
+                // shape would clip the circle's fringe on a board with a small violation near
+                // the edge of the viewport.
+                IntBox violation_box = curr_violation.shape.bounding_box()
+                        .union(centre.bounding_box().offset(draw_radius));
+                if (!violation_box.intersects(clip_box))
+                {
+                    continue;
+                }
+            }
+
+            p_graphics_context.fill_area(curr_violation.shape, p_graphics, draw_color, intensity);
+            // draw a circle around the violation.
+            p_graphics_context.draw_circle(centre, draw_radius, 0.1 * draw_radius, draw_color,
+                    p_graphics, intensity);
+        }
     }
 
 
