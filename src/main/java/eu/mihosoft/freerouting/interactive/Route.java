@@ -175,6 +175,12 @@ public class Route
 
 
         // eu.mihosoft.freerouting.tests.Validate.check("before insert", eu.mihosoft.freerouting.board);
+        // Below, and at every other insert_forced_trace_segment() call site in this class, the
+        // TimeLimit-only overload is used deliberately rather than the Stoppable-aware one now
+        // available on RoutingBoard/ShoveTraceAlgo/ForcedPadAlgo/MoveDrillItemAlgo. next_corner()
+        // runs synchronously on the EDT, so there is no separate thread that could ever flip a
+        // Stoppable's is_stop_requested() while this call is in progress -- the whole point of
+        // that plumbing is to let a *background* worker abandon early once one exists.
         Point ok_point = board.insert_forced_trace_segment(prev_corner,
                 curr_corner, pen_half_width_arr[layer], layer, net_no_arr, clearance_class,
                 max_shove_trace_recursion_depth, max_shove_via_recursion_depth, max_spring_over_recursion_depth,

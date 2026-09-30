@@ -23,6 +23,7 @@
 
 package eu.mihosoft.freerouting.board;
 
+import eu.mihosoft.freerouting.datastructures.Stoppable;
 import eu.mihosoft.freerouting.datastructures.TimeLimit;
 
 import eu.mihosoft.freerouting.geometry.planar.Direction;
@@ -64,7 +65,7 @@ public class ForcedPadAlgo
      */
     public CheckDrillResult check_forced_pad(TileShape p_pad_shape, CalcFromSide p_from_side, int p_layer, int[] p_net_no_arr,
             int p_cl_type, boolean p_copper_sharing_allowed, Collection<Item> p_ignore_items, int p_max_recursion_depth, int p_max_via_recursion_depth,
-            boolean p_check_only_front, TimeLimit p_time_limit)
+            boolean p_check_only_front, TimeLimit p_time_limit, Stoppable p_stoppable_thread)
     {
         if (!p_pad_shape.is_contained_in(board.get_bounding_box()))
         {
@@ -108,7 +109,7 @@ public class ForcedPadAlgo
             Collection<Item> ignore_items = new java.util.LinkedList<Item>();
             if (!MoveDrillItemAlgo.check(curr_shove_via, delta,
                     p_max_recursion_depth, p_max_via_recursion_depth - 1, ignore_items,
-                    this.board, p_time_limit))
+                    this.board, p_time_limit, p_stoppable_thread))
             {
                 return CheckDrillResult.NOT_DRILLABLE;
             }
@@ -169,7 +170,8 @@ public class ForcedPadAlgo
                     CalcShapeAndFromSide curr = new CalcShapeAndFromSide(curr_substitute_trace, i, is_orthogonal_mode, true);
                     if (!shove_trace_algo.check(curr.shape, curr.from_side, curr_dir, p_layer,
                             curr_substitute_trace.net_no_arr, curr_substitute_trace.clearance_class_no(),
-                            p_max_recursion_depth - 1, p_max_via_recursion_depth, 0, p_time_limit))
+                            p_max_recursion_depth - 1, p_max_via_recursion_depth, 0, p_time_limit,
+                            p_stoppable_thread))
                     {
                         return CheckDrillResult.NOT_DRILLABLE;
                     }
@@ -186,8 +188,18 @@ public class ForcedPadAlgo
      * becomes necessesary.
      */
     boolean forced_pad(TileShape p_pad_shape, CalcFromSide p_from_side,
-            int p_layer, int[] p_net_no_arr, int p_cl_type, boolean p_copper_sharing_allowed, Collection<Item> p_ignore_items, int p_max_recursion_depth, int p_max_via_recursion_depth)
+            int p_layer, int[] p_net_no_arr, int p_cl_type, boolean p_copper_sharing_allowed, Collection<Item> p_ignore_items, int p_max_recursion_depth, int p_max_via_recursion_depth,
+            TimeLimit p_time_limit, Stoppable p_stoppable_thread)
     {
+        // Same reasoning as ShoveTraceAlgo.insert: this is only reached after
+        // check_forced_pad already agreed it should work, so a timeout/stop request is just an
+        // ordinary shove failure to whichever caller (MoveDrillItemAlgo.insert,
+        // ForcedViaAlgo.insert) is expecting one.
+        if (p_time_limit != null && p_time_limit.limit_exceeded()
+                || p_stoppable_thread != null && p_stoppable_thread.is_stop_requested())
+        {
+            return false;
+        }
         if (p_pad_shape.is_empty())
         {
             FRLogger.warn("ShoveTraceAux.forced_pad: p_pad_shape is empty");
@@ -199,7 +211,8 @@ public class ForcedPadAlgo
             return false;
         }
         if (!MoveDrillItemAlgo.shove_vias(p_pad_shape, p_from_side, p_layer, p_net_no_arr, p_cl_type,
-                p_ignore_items, p_max_recursion_depth, p_max_via_recursion_depth, false, this.board))
+                p_ignore_items, p_max_recursion_depth, p_max_via_recursion_depth, false, this.board, p_time_limit,
+                p_stoppable_thread))
         {
             return false;
         }
@@ -252,7 +265,8 @@ public class ForcedPadAlgo
                         new CalcShapeAndFromSide(curr_substitute_trace, i, is_orthogonal_mode, false);
                 if (!shove_trace_algo.insert(curr.shape, curr.from_side,
                         p_layer, curr_net_no_arr, curr_substitute_trace.clearance_class_no(),
-                        p_ignore_items, p_max_recursion_depth - 1, p_max_via_recursion_depth, 0))
+                        p_ignore_items, p_max_recursion_depth - 1, p_max_via_recursion_depth, 0, p_time_limit,
+                        p_stoppable_thread))
                 {
                     return false;
                 }

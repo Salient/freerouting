@@ -26,6 +26,7 @@ package eu.mihosoft.freerouting.board;
 
 import java.util.Collection;
 
+import eu.mihosoft.freerouting.datastructures.Stoppable;
 import eu.mihosoft.freerouting.datastructures.TimeLimit;
 
 import eu.mihosoft.freerouting.geometry.planar.TileShape;
@@ -51,13 +52,27 @@ public class MoveDrillItemAlgo
     /**
      * checks, if p_drill_item can be translated by p_vector by shoving obstacle
      * traces and vias aside, so that no clearance violations occur.
+     * Equivalent to calling the overload below with no stoppable thread; kept so that
+     * eu.mihosoft.freerouting.board.MoveComponent and eu.mihosoft.freerouting.board.OptViaAlgo,
+     * which have nothing to do with interactive shoving, do not need to be touched.
      */
     public static boolean check(DrillItem p_drill_item, Vector p_vector, int p_max_recursion_depth,
             int p_max_via_recursion_depth, Collection<Item> p_ignore_items,
             RoutingBoard p_board, TimeLimit p_time_limit)
     {
-        
-        if (p_time_limit != null && p_time_limit.limit_exceeded())
+        return check(p_drill_item, p_vector, p_max_recursion_depth, p_max_via_recursion_depth, p_ignore_items,
+                p_board, p_time_limit, null);
+    }
+
+    /**
+     * As above, but also abandonable via p_stoppable_thread.
+     */
+    public static boolean check(DrillItem p_drill_item, Vector p_vector, int p_max_recursion_depth,
+            int p_max_via_recursion_depth, Collection<Item> p_ignore_items,
+            RoutingBoard p_board, TimeLimit p_time_limit, Stoppable p_stoppable_thread)
+    {
+        if (p_time_limit != null && p_time_limit.limit_exceeded()
+                || p_stoppable_thread != null && p_stoppable_thread.is_stop_requested())
         {
             return false;
         }
@@ -113,7 +128,8 @@ public class MoveDrillItemAlgo
             CalcFromSide from_side = new CalcFromSide(p_drill_item.get_center(), curr_tile_shape);
             if (forced_pad_algo.check_forced_pad(curr_tile_shape, from_side, curr_layer,
                     p_drill_item.net_no_arr, p_drill_item.clearance_class_no(), attach_allowed,
-                    ignore_items, p_max_recursion_depth, p_max_via_recursion_depth, true, p_time_limit)
+                    ignore_items, p_max_recursion_depth, p_max_via_recursion_depth, true, p_time_limit,
+                    p_stoppable_thread)
                     == ForcedPadAlgo.CheckDrillResult.NOT_DRILLABLE)
             {
                 return false;
@@ -126,11 +142,44 @@ public class MoveDrillItemAlgo
      * Translates p_drill_item by p_vector by shoving obstacle
      * traces and vias aside, so that no clearance violations occur.
      * If p_tidy_region != null, it will be joined by the bounding octagons of the translated shapes.
+     * Equivalent to calling the overload below with a null (unlimited) time limit; kept so that
+     * eu.mihosoft.freerouting.board.OptViaAlgo, which has nothing to do with interactive shoving, does not
+     * need to be touched.
      */
     static boolean insert(DrillItem p_drill_item, Vector p_vector,
             int p_max_recursion_depth, int p_max_via_recursion_depth, IntOctagon p_tidy_region,
             RoutingBoard p_board)
     {
+        return insert(p_drill_item, p_vector, p_max_recursion_depth, p_max_via_recursion_depth, p_tidy_region,
+                p_board, null);
+    }
+
+    /**
+     * As above, but bounded by p_time_limit.
+     */
+    static boolean insert(DrillItem p_drill_item, Vector p_vector,
+            int p_max_recursion_depth, int p_max_via_recursion_depth, IntOctagon p_tidy_region,
+            RoutingBoard p_board, TimeLimit p_time_limit)
+    {
+        return insert(p_drill_item, p_vector, p_max_recursion_depth, p_max_via_recursion_depth, p_tidy_region,
+                p_board, p_time_limit, null);
+    }
+
+    /**
+     * As above, but also abandonable via p_stoppable_thread.
+     */
+    static boolean insert(DrillItem p_drill_item, Vector p_vector,
+            int p_max_recursion_depth, int p_max_via_recursion_depth, IntOctagon p_tidy_region,
+            RoutingBoard p_board, TimeLimit p_time_limit, Stoppable p_stoppable_thread)
+    {
+        // Like ShoveTraceAlgo.insert, this is only ever called after a check() already agreed
+        // it should work, so a timeout/stop request here is just an ordinary shove failure to
+        // the caller.
+        if (p_time_limit != null && p_time_limit.limit_exceeded()
+                || p_stoppable_thread != null && p_stoppable_thread.is_stop_requested())
+        {
+            return false;
+        }
         if (p_drill_item.is_shove_fixed())
         {
             return false;
@@ -170,7 +219,7 @@ public class MoveDrillItemAlgo
             CalcFromSide from_side = new CalcFromSide(p_drill_item.get_center(), curr_tile_shape);
             if (!forced_pad_algo.forced_pad(curr_tile_shape, from_side, curr_layer, p_drill_item.net_no_arr,
                     p_drill_item.clearance_class_no(), attach_allowed,
-                    ignore_items, p_max_recursion_depth, p_max_via_recursion_depth))
+                    ignore_items, p_max_recursion_depth, p_max_via_recursion_depth, p_time_limit, p_stoppable_thread))
             {
                 return false;
             }
@@ -190,8 +239,18 @@ public class MoveDrillItemAlgo
     static boolean shove_vias(TileShape p_obstacle_shape, CalcFromSide p_from_side, int p_layer, int[] p_net_no_arr,
             int p_cl_type, Collection<Item> p_ignore_items, int p_max_recursion_depth,
             int p_max_via_recursion_depth, boolean p_copper_sharing_allowed,
-            RoutingBoard p_board)
+            RoutingBoard p_board, TimeLimit p_time_limit, Stoppable p_stoppable_thread)
     {
+        // Best-effort: on a timeout/stop request, just stop trying to relocate vias instead of
+        // failing outright. Whatever is still in the way gets found again as a normal obstacle by
+        // ShoveTraceAlgo.insert's/ForcedPadAlgo.forced_pad's own fresh shape_entries scan right
+        // after this call returns, and rejected cleanly there -- exactly like a via this method
+        // could not find a new location for further down in the loop below (see "continue").
+        if (p_time_limit != null && p_time_limit.limit_exceeded()
+                || p_stoppable_thread != null && p_stoppable_thread.is_stop_requested())
+        {
+            return true;
+        }
         ShapeSearchTree search_tree = p_board.search_tree_manager.get_default_tree();
         ShapeTraceEntries shape_entries =
                 new ShapeTraceEntries(p_obstacle_shape, p_layer, p_net_no_arr, p_cl_type, p_from_side, p_board);
@@ -253,7 +312,8 @@ public class MoveDrillItemAlgo
             {
                 continue;
             }
-            if (!insert(curr_via, rel_coor, p_max_recursion_depth, p_max_via_recursion_depth - 1, null, p_board))
+            if (!insert(curr_via, rel_coor, p_max_recursion_depth, p_max_via_recursion_depth - 1, null, p_board,
+                    p_time_limit, p_stoppable_thread))
             {
                 return false;
             }
