@@ -9,6 +9,41 @@ Throughout, "the reference board" is the 6-layer board currently driving the
 Altium round trip: ~15k items, 438 nets, 44 incomplete connections and ~848
 real clearance violations after `-rm finish`.
 
+## 0. The objective
+
+Decided with the user: **reproducibility is not a requirement.** The only thing
+judged is the quality of the final board — aesthetics, efficiency, total trace
+length, via count. Two runs of the same input may legitimately differ.
+
+This is the right call and it shapes everything in §6: a router is a heuristic
+optimiser, the artifact it emits is reviewed and DRC'd on its own merits, and
+insisting on bit-identical output would forfeit most of the available
+parallelism to buy a property nobody needs. Concretely it means commit order may
+follow completion order, RNG seeds need not be fixed, and the acceptance test
+for any change is a *score comparison*, not a diff.
+
+So every proposal below is measured against one function, which the code already
+has most of — `BatchOptRoute.opt_route_pass:179`:
+
+    incomplete count  →  via count  →  weighted trace length
+
+lexicographically, lower better. `calc_weighted_trace_length` weights length by
+clearance class; `routing_board.get_vias().size()` and
+`BasicBoard.cumulative_trace_length()` supply the rest.
+
+**Aesthetics is the one named metric this does not capture.** Length and via
+count get most of the way there, but the thing that reads as ugly on screen is
+usually bend count — detours, staircases, and traces that wander off the
+preferred direction. `PolylineTrace.corner_count()` already exists, so a fourth
+term (total corners, or corners in excess of the airline's minimum) is cheap to
+add and would let "aesthetics" be optimised rather than eyeballed. Worth adding
+as a *reported* metric first, before it is given weight in the accept/reject
+decision, so we can see how it correlates with the boards you judge by eye.
+
+Extracting that scoring function into one place — `BoardScore.of(board)`,
+returning all four terms — is a small prerequisite for §6 E, since comparing K
+boards is the whole mechanism there.
+
 ## Summary of what exists
 
 | Ask | Status | Where |
@@ -196,7 +231,9 @@ This list is the actual work of any parallel scheme:
    `start_marking_changed_area()` per item in the pass loop.
 5. **`MazeSearchAlgo.random_generator`**, seeded from `ripup_costs`
    (`MazeSearchAlgo.java:86`) *specifically* to keep the ripup algorithm
-   reproducible.
+   reproducible. Per §0 that property is not needed, so this is not a constraint
+   — but note it is a `java.util.Random` reachable from concurrent searches, so
+   it still needs to become per-engine to avoid contention on its internal seed.
 6. `hdlg.screen_messages` / `hdlg.repaint()` — EDT coupling in the pass loop.
 
 Per-engine state (`drill_page_array`, the expansion room lists) is already
@@ -223,16 +260,31 @@ have not profiled the serial case.
 `calc_weighted_trace_length`, the search-tree bulk build at import. Do these
 opportunistically.
 
-**E. K independent routers, pick the best board.** The user's own "run multiple
-instances and flag conflicts", in its safest form: run K full routers on K
-copies of the board with different seeds and weight schedules, then keep the
-best result by `BatchOptRoute`'s existing objective (incompletes → vias →
-length). Zero conflict resolution, zero algorithm change, zero shared state —
-the instances never touch each other. Scales straight to as many cores as you
-have RAM for board copies. It does not make a single route faster, but it
-converts cores directly into *better* results, which on a board with 44
-incompletes is what is actually wanted. **This is the recommended first
-parallel step.**
+**E. Portfolio: K independent routers, keep the best board.** The user's own
+"run multiple instances", in its strongest form. Run K full routers on K copies
+of the board, each with a different RNG seed and weight schedule, and keep
+whichever board scores best on the §0 objective. Zero conflict resolution, zero
+algorithm change, zero shared state — the instances never touch each other.
+Scales to as many cores as you have RAM for board copies.
+
+Because only the final artifact is judged, this is not a compromise, it is the
+approach that most directly optimises the stated metric. Seed diversity is now a
+*feature*: `MazeSearchAlgo` seeds its RNG from `ripup_costs` purely for
+reproducibility (`MazeSearchAlgo.java:86`), and varying it instead turns each
+core into an independent sample of the result distribution. Ripup-based routing
+has high variance between seeds, so the max over K samples is meaningfully better
+than any single run — and this is the cheapest way in the whole plan to convert
+cores into better boards.
+
+Extend it to a **parameter sweep**, since the search is already parameterised by
+everything §3–§5 exposes: via costs, per-layer trace costs, `add_via_costs`,
+ripup schedule, starting pass. Sweeping those across workers explores the
+trade-off surface rather than guessing one point on it, and it answers the
+inner-layer question (§4) empirically instead of by hand-tuning a slider.
+
+It does not make a single route faster. It makes the *result* better, which on a
+board with 44 incompletes is what is actually wanted. **This is the recommended
+first parallel step**, and given §0 it may be sufficient on its own.
 
 **A. Speculative parallel routing with serialized commit.** The real
 fine-grained answer. Route N connections concurrently against a read-only board
@@ -245,13 +297,14 @@ geometry violate clearance against anything committed since its snapshot).
 Ripup makes naive conflicts frequent, so batch by **spatial disjointness**:
 group pending connections whose airline bounding boxes, expanded by the
 clearance, do not overlap. Conflicts then become rare and most commits land.
+This is purely a throughput heuristic — it is not load-bearing for correctness.
 
-The serious risk is **determinism**, and it matters more here than usual: this
-board is heading to a layout review, and a router whose output depends on thread
-scheduling is very hard to defend. So batch composition and commit order must be
-deterministic functions of the input (sort by item id), never of completion
-order. Same input plus same thread count must give a bit-identical board. Treat
-that as an acceptance test, not an aspiration.
+**Reproducibility is explicitly not required** (see §0). That removes what would
+otherwise be this approach's main cost: commits can land in completion order,
+with no barrier waiting on a particular thread and no need to make batch
+composition a function of the input. It also frees
+`MazeSearchAlgo.random_generator` from its fixed seed, which becomes an asset
+rather than a constraint — see E.
 
 **B. Parallelize inside one maze search — rejected.** Parallel best-first
 search brings duplicate expansion and load-balancing problems, would require
@@ -262,17 +315,27 @@ here is small enough that there is little to win.
 
 1. Log the swallowed exceptions in `autoroute_item` / `autoroute_pass`. One
    line, possibly a large answer.
-2. Profile a full `-rm finish` run; find where the time actually goes.
-3. E — K independent routers, best board wins.
-4. Only then A, starting with moving `ItemAutorouteInfo` off `Item`, which is
-   worth doing on its own merits.
+2. Extract `BoardScore` (§0) and report it at the end of every run. Nothing
+   below can be evaluated without it.
+3. Profile a full `-rm finish` run; find where the time actually goes.
+4. E — portfolio of K independent routers with varied seeds and weights, best
+   board wins. Given §0 this is the highest value-per-hour parallel work, and
+   possibly the last one needed.
+5. Only then A, starting with moving `ItemAutorouteInfo` off `Item` — worth
+   doing on its own merits regardless.
 
 ## Suggested overall order
 
 1. §1 violations lag, steps 1–4 (hours, no routing risk)
-2. §4 inner-layer preference (the hook is wired; this is cost assignment)
-3. §2 `-sp` flag and last-pass logging (small)
-4. §3 confirm postroute is on, expose via-reduction effort (small)
-5. §6 step 1–2: exception logging, then profile
-6. §5 trace width ladder, with the per-net floor
-7. §6 step 3–4: parallel instances, then speculative commit
+2. §6 step 1: log the swallowed exceptions (one line)
+3. §0 `BoardScore` + report it every run — the measuring stick for all of the below
+4. §4 inner-layer preference (the hook is wired; this is cost assignment)
+5. §2 `-sp` flag and last-pass logging (small)
+6. §3 confirm postroute is on, expose via-reduction effort (small)
+7. §6 step 3: profile a full run
+8. §5 trace width ladder, with the per-net floor
+9. §6 step 4: the portfolio router — then A only if that proves insufficient
+
+Items 2 and 3 moved up: with reproducibility off the table, everything is judged
+by score, so the score has to exist and be trustworthy before the tuning work in
+4-6 can be told apart from noise.
