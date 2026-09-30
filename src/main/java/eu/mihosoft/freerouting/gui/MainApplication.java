@@ -120,6 +120,13 @@ public class MainApplication extends javax.swing.JFrame
             // -il: 0 is AutorouteSettings' own default, so this is a no-op unless the flag was
             // actually passed.
             new_frame.board_panel.board_handling.settings.autoroute_settings.set_inner_layer_preference(startupOptions.inner_layer_preference);
+            // -sp: only override start_pass_no if the flag was actually given (sentinel -1
+            // means "not specified"). The design file itself may carry its own start_pass_no
+            // (e.g. resuming a freerouting-exported .dsn), and absent -sp must not stomp on it.
+            if (startupOptions.start_pass_no >= 1)
+            {
+                new_frame.board_panel.board_handling.settings.autoroute_settings.set_start_pass_no(startupOptions.start_pass_no);
+            }
             new_frame.board_panel.board_handling.settings.autoroute_settings.set_stop_pass_no(new_frame.board_panel.board_handling.settings.autoroute_settings.get_start_pass_no() + startupOptions.max_passes - 1);
             if (startupOptions.max_passes < 99999 || startupOptions.max_seconds > 0)
             {

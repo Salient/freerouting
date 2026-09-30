@@ -56,6 +56,13 @@ public class StartupOptions {
     // Wall-clock limit for headless batch autorouting, in seconds. <= 0 means no
     // limit (route until the autorouter finishes or the pass cap is reached).
     int max_seconds = 0;
+    // -sp: which ripup pass's *weights* to start at (AutorouteSettings.start_pass_no). This is
+    // NOT a checkpoint/restore -- the board is whatever -de loaded; only the ripup-cost
+    // schedule (BatchAutorouter.java: ripup_costs = start_ripup_costs * pass_no) picks up as if
+    // that many passes had already run. -1 is the sentinel for "not specified": a design file
+    // can carry its own embedded start_pass_no (e.g. a freerouting-exported .dsn resumed from a
+    // prior run), and the default here must not stomp on that when the flag is simply absent.
+    int start_pass_no = -1;
     java.util.Locale current_locale = java.util.Locale.ENGLISH;
 
     private StartupOptions() {
@@ -126,6 +133,13 @@ public class StartupOptions {
                     // ahead of any future "-i*" flag that could be a prefix of this one.
                     if (p_args.length > i + 1 && !p_args[i + 1].startsWith("-")) {
                         inner_layer_preference = Integer.decode(p_args[i + 1]);
+                    }
+                } else if (p_args[i].startsWith("-sp")) {
+                    // Must be checked before "-s" below: "-sp".startsWith("-s") is true, so if
+                    // "-s" came first every "-sp N" would be swallowed as the (no-value) session
+                    // file flag and N would be treated as the next, unrelated argument.
+                    if (p_args.length > i + 1 && !p_args[i + 1].startsWith("-")) {
+                        start_pass_no = Integer.decode(p_args[i + 1]);
                     }
                 } else if (p_args[i].startsWith("-l")) {
                     // the locale is provided
