@@ -606,7 +606,12 @@ public class BoardHandling extends BoardHandlingImpl
         if (clearance_violations == null)
         {
             clearance_violations = new ClearanceViolations(this.board.get_items());
-            Integer violation_count = Integer.valueOf((clearance_violations.list.size() + 1) / 2);
+            // clearance_violations.list is already de-duplicated (one entry per item pair per
+            // layer, not one per item's point of view) and filtered down to different-net pairs
+            // whose overlap is big enough to matter -- see ClearanceViolations for why. It used
+            // to be exactly double this and included same-net pairs and rounding noise, which is
+            // why this used to divide the raw size by two instead of reporting it directly.
+            Integer violation_count = Integer.valueOf(clearance_violations.list.size());
             String curr_message = violation_count.toString() + " " + resources.getString("clearance_violations_found");
             screen_messages.set_status_message(curr_message);
         }

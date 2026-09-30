@@ -17,24 +17,16 @@ import java.util.Collection;
  * copper that is already there actually meets the spacing the design calls for.
  *
  * <p>All of the geometry work is done by Item.clearance_violations(), which already resolves
- * each pair against BoardRules.clearance_matrix. This class only enumerates the board and
- * formats the result, so the report is only as correct as the clearance matrix that was
+ * each pair against BoardRules.clearance_matrix. The de-duplication (each overlap is found
+ * from both items' point of view) and the filtering (same-net pairs are connected, not too
+ * close; sub-{@link ClearanceViolations#MIN_REPORTED_OVERLAP_MIL}-mil overlaps are rounding
+ * noise from the integer clearance check) live in ClearanceViolations, so the interactive
+ * display and this report are always looking at the same set of violations. This class only
+ * formats that set, so the report is only as correct as the clearance matrix that was
  * imported -- which is the entire reason AltiumConstraintsFile exists.
  */
 public class ClearanceReport
 {
-    /**
-     * Overlaps below this are not reported, in mil.
-     *
-     * <p>freerouting checks clearance in integer units of 1/100 mil, and does it by enlarging
-     * both shapes by half the required clearance and intersecting them, so half-clearances and
-     * trace half-widths each round. That leaves overlaps of a few hundredths of a mil on copper
-     * that is actually compliant. On the reference board 1041 of 2799 reported violations were
-     * under 0.5 mil, which is well inside fabrication tolerance and far below anything Altium
-     * would report - they buried the ~1157 that are real.
-     */
-    private static final double MIN_REPORTED_OVERLAP_MIL = 0.5;
-
     private ClearanceReport()
     {
     }
@@ -45,46 +37,20 @@ public class ClearanceReport
      */
     public static int write(BasicBoard p_board, PrintWriter p_output)
     {
-        // ClearanceViolations reports each violation from both items' point of view, so the
-        // same overlap turns up twice with first_item and second_item swapped. Count each
-        // one once, keyed by the unordered item pair and the layer.
         Collection<Item> items = p_board.get_items();
         ClearanceViolations violations = new ClearanceViolations(items);
-        java.util.Set<String> seen = new java.util.HashSet<>();
         java.util.List<String> lines = new java.util.ArrayList<>();
-        int below_tolerance = 0;
 
         for (ClearanceViolation violation : violations.list)
         {
-            // Two items on the same net are connected, not too close together. Item's own
-            // violation search does not filter by net (it passes an empty ignore-net array,
-            // because its caller is the interactive move/drag preview), so without this the
-            // report calls every through-hole pin pair of one net a violation on every layer.
-            // Altium agrees: its clearance rules carry NETSCOPE=DifferentNets.
-            if (violation.first_item.shares_net(violation.second_item))
-            {
-                continue;
-            }
-            int first_id = violation.first_item.get_id_no();
-            int second_id = violation.second_item.get_id_no();
-            String key = Math.min(first_id, second_id) + "-" + Math.max(first_id, second_id)
-                    + "@" + violation.layer;
-            if (!seen.add(key))
-            {
-                continue;
-            }
             // The violation shape is the overlap of the two clearance-enlarged outlines, so
             // its width is how far short of the required clearance the pair falls.
             double shortfall = p_board.communication.coordinate_transform.board_to_dsn(
                     2 * violation.shape.smallest_radius());
-            if (shortfall < MIN_REPORTED_OVERLAP_MIL)
-            {
-                ++below_tolerance;
-                continue;
-            }
             lines.add(format(p_board, violation, shortfall));
         }
 
+        int below_tolerance = violations.excluded_below_tolerance_count;
         java.util.Collections.sort(lines);
         p_output.println("# freerouting clearance verification");
         p_output.println("# layer\trequired\tactual_overlap\tnet_a\titem_a\tnet_b\titem_b\tat_x\tat_y");
@@ -93,12 +59,14 @@ public class ClearanceReport
             p_output.println(line);
         }
         p_output.println("# " + lines.size() + " clearance violation(s) over " + items.size() + " item(s)");
-        p_output.println("# " + below_tolerance + " further overlap(s) under " + MIN_REPORTED_OVERLAP_MIL
+        p_output.println("# " + below_tolerance + " further overlap(s) under "
+                + ClearanceViolations.MIN_REPORTED_OVERLAP_MIL
                 + " mil not reported (rounding in the clearance check, not design violations)");
         p_output.flush();
 
         String suppressed = below_tolerance == 0 ? ""
-                : " (" + below_tolerance + " more under " + MIN_REPORTED_OVERLAP_MIL + " mil not reported)";
+                : " (" + below_tolerance + " more under " + ClearanceViolations.MIN_REPORTED_OVERLAP_MIL
+                    + " mil not reported)";
         if (lines.isEmpty())
         {
             FRLogger.info("Clearance verification: no violations over " + items.size() + " items" + suppressed + ".");
