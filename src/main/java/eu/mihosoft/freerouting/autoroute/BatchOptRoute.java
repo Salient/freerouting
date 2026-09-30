@@ -30,9 +30,8 @@ import eu.mihosoft.freerouting.board.Item;
 import eu.mihosoft.freerouting.board.Via;
 import eu.mihosoft.freerouting.board.Trace;
 import eu.mihosoft.freerouting.board.RoutingBoard;
-import eu.mihosoft.freerouting.board.FixedState;
-import eu.mihosoft.freerouting.board.TestLevel;
 
+import eu.mihosoft.freerouting.interactive.AutorouteSettings;
 import eu.mihosoft.freerouting.interactive.InteractiveActionThread;
 import eu.mihosoft.freerouting.logger.FRLogger;
 
@@ -59,20 +58,57 @@ public class BatchOptRoute
      */
     public void optimize_board()
     {
-        if (routing_board.get_test_level() != TestLevel.RELEASE_VERSION)
-        {
-            FRLogger.warn("Before optimize: Via count: " + routing_board.get_vias().size() + ", trace length: " + Math.round(routing_board.cumulative_trace_length()));
-        }
-        boolean route_improved = true;
-        int curr_pass_no = 0;
-        use_increased_ripup_costs = true;
+        // This used to be gated on get_test_level() != RELEASE_VERSION, which is the default
+        // test level for every CLI/batch run -- so in practice this line never printed outside
+        // of interactive debugging. Folded into the BoardScore report and made unconditional so
+        // a batch run's via reduction is actually visible (see task 5).
+        this.thread.hdlg.remove_ratsnest();
+        int incomplete_count_before_optimize = this.thread.hdlg.get_ratsnest().incomplete_count();
+        BoardScore.of(routing_board, incomplete_count_before_optimize).log("Before postroute optimize");
 
-        while (route_improved)
+        // Via reduction effort: raise via_costs for postroute only. Higher via costs make the
+        // maze search itself avoid vias more; combined with opt_route_item's accept-if-fewer-
+        // vias rule (now BoardScore.is_better_than), that is the direct lever for reducing via
+        // count. Restored in a finally block: via_costs is shared, global AutorouteSettings
+        // state also read by the main autoroute phase and the interactive router, so this must
+        // not leak a permanent change beyond this method. At effort 0 the factor is exactly
+        // 1.0, so this is a no-op (boosted_via_costs == base_via_costs, the set/restore pair is
+        // skipped entirely).
+        AutorouteSettings autoroute_settings = this.thread.hdlg.get_settings().autoroute_settings;
+        int base_via_costs = autoroute_settings.get_via_costs();
+        int boosted_via_costs = (int) Math.round(base_via_costs * autoroute_settings.get_via_cost_boost_factor());
+        boolean via_costs_boosted = boosted_via_costs != base_via_costs;
+        if (via_costs_boosted)
         {
-            ++curr_pass_no;
-            boolean with_prefered_directions = (curr_pass_no % 2 != 0); // to create more variations
-            route_improved = opt_route_pass(curr_pass_no, with_prefered_directions);
+            FRLogger.info("Via reduction effort = " + autoroute_settings.get_via_reduction_effort()
+                    + "/100: raising via_costs from " + base_via_costs + " to " + boosted_via_costs
+                    + " for postroute only.");
+            autoroute_settings.set_via_costs(boosted_via_costs);
         }
+        try
+        {
+            boolean route_improved = true;
+            int curr_pass_no = 0;
+            use_increased_ripup_costs = true;
+
+            while (route_improved)
+            {
+                ++curr_pass_no;
+                boolean with_prefered_directions = (curr_pass_no % 2 != 0); // to create more variations
+                route_improved = opt_route_pass(curr_pass_no, with_prefered_directions);
+            }
+        }
+        finally
+        {
+            if (via_costs_boosted)
+            {
+                autoroute_settings.set_via_costs(base_via_costs);
+            }
+        }
+
+        this.thread.hdlg.remove_ratsnest();
+        int incomplete_count_after_optimize = this.thread.hdlg.get_ratsnest().incomplete_count();
+        BoardScore.of(routing_board, incomplete_count_after_optimize).log("After postroute optimize");
     }
 
     /**
@@ -86,7 +122,7 @@ public class BatchOptRoute
         double trace_length_before = this.thread.hdlg.coordinate_transform.board_to_user(this.routing_board.cumulative_trace_length());
         this.thread.hdlg.screen_messages.set_post_route_info(via_count_before, trace_length_before);
         this.sorted_route_items = new ReadSortedRouteItems();
-        this.min_cumulative_trace_length_before = calc_weighted_trace_length(routing_board);
+        this.min_cumulative_trace_length_before = BoardScore.calc_weighted_trace_length(routing_board);
         for (;;)
         {
             if (this.thread.is_stop_requested())
@@ -174,29 +210,29 @@ public class BatchOptRoute
                 ripup_costs, p_with_prefered_directions);
         this.thread.hdlg.remove_ratsnest();
         int incomplete_count_after = this.thread.hdlg.get_ratsnest().incomplete_count();
-        int via_count_after = this.routing_board.get_vias().size();
-        double trace_length_after = calc_weighted_trace_length(routing_board);
-        boolean route_improved = !this.thread.is_stop_requested() && (incomplete_count_after < incomplete_count_before ||
-                incomplete_count_after == incomplete_count_before &&
-                (via_count_after < via_count_before ||
-                via_count_after == via_count_before &&
-                this.min_cumulative_trace_length_before > trace_length_after));
+        // score_before's weighted_trace_length is deliberately the running minimum seen so far
+        // in this optimize_board() pass, not a fresh measurement of the current board -- that
+        // running minimum is what "min_cumulative_trace_length_before" has always tracked here.
+        // score_after is a fresh, single-scan measurement of the board as it stands right now.
+        BoardScore score_before = BoardScore.of(incomplete_count_before, via_count_before, this.min_cumulative_trace_length_before, -1);
+        BoardScore score_after = BoardScore.of(routing_board, incomplete_count_after);
+        boolean route_improved = !this.thread.is_stop_requested() && score_after.is_better_than(score_before);
         if (route_improved)
         {
-            if (incomplete_count_after < incomplete_count_before ||
-                    incomplete_count_after == incomplete_count_before && via_count_after < via_count_before)
+            if (score_after.incomplete_count < score_before.incomplete_count ||
+                    score_after.incomplete_count == score_before.incomplete_count && score_after.via_count < score_before.via_count)
             {
-                this.min_cumulative_trace_length_before = trace_length_after;
+                this.min_cumulative_trace_length_before = score_after.weighted_trace_length;
             }
             else
             {
                 // Only cumulative trace length shortened.
                 // Catch unexpected increase of cumulative trace length somewhere for examole by removing acid trapsw.
-                this.min_cumulative_trace_length_before = Math.min(this.min_cumulative_trace_length_before, trace_length_after);
+                this.min_cumulative_trace_length_before = Math.min(this.min_cumulative_trace_length_before, score_after.weighted_trace_length);
             }
             routing_board.pop_snapshot();
             double new_trace_length = this.thread.hdlg.coordinate_transform.board_to_user(this.routing_board.cumulative_trace_length());
-            this.thread.hdlg.screen_messages.set_post_route_info(via_count_after, new_trace_length);
+            this.thread.hdlg.screen_messages.set_post_route_info(score_after.via_count, new_trace_length);
         }
         else
         {
@@ -215,41 +251,6 @@ public class BatchOptRoute
             }
         }
         return true;
-    }
-
-    /**
-     *  Calculates the cumulative trace lengths multiplied by the trace radius of all traces
-     *  on the board, which are not shove_fixed.
-     */
-    private static double calc_weighted_trace_length(RoutingBoard p_board)
-    {
-        double result = 0;
-        int default_clearance_class = eu.mihosoft.freerouting.rules.BoardRules.default_clearance_class();
-        Iterator<UndoableObjects.UndoableObjectNode> it = p_board.item_list.start_read_object();
-        for (;;)
-        {
-            UndoableObjects.Storable curr_item = p_board.item_list.read_object(it);
-            if (curr_item == null)
-            {
-                break;
-            }
-            if (curr_item instanceof Trace)
-            {
-                Trace curr_trace = (Trace) curr_item;
-                FixedState fixed_state = curr_trace.get_fixed_state();
-                if (fixed_state == FixedState.UNFIXED || fixed_state == FixedState.SHOVE_FIXED)
-                {
-                    double weighted_trace_length = curr_trace.get_length() * (curr_trace.get_half_width() + p_board.clearance_value(curr_trace.clearance_class_no(), default_clearance_class, curr_trace.get_layer()));
-                    if (fixed_state == FixedState.SHOVE_FIXED)
-                    {
-                        // to produce less violations with pin exit directions.
-                        weighted_trace_length /= 2;
-                    }
-                    result += weighted_trace_length;
-                }
-            }
-        }
-        return result;
     }
 
     /**

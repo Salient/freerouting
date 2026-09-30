@@ -37,6 +37,18 @@ Application options (see docs/frpcb-format.md)
   -mt SECONDS     Stop autorouting after this long, then write -do.
   -mp N           Maximum number of autorouter passes.
   -dr FILE        Design rules file.
+  -il N           Inner layer preference, 0-100. 0 (default) is a no-op; higher values bias
+                  the router away from the two outermost signal layers, balanced against the
+                  extra vias that costs. No effect on 1- or 2-layer boards.
+  -sp N           Start pass: begin at ripup pass N's *weights* (ripup_costs scales with the
+                  pass number). This is NOT checkpoint/restore -- the board is whatever -de
+                  loaded, nothing about routed state is saved or resumed. Every batch run logs
+                  "Last recorded ripup pass number: N" at the end; pass that N back in here to
+                  continue with the same ripup-cost schedule on a later run.
+  -vr N           Via reduction effort, 0-100. 0 (default) is a no-op; higher values raise
+                  via_costs during the postroute pass only, making the maze search avoid vias
+                  more so more re-routes come out with fewer of them. Requires postroute to be
+                  enabled (it is, by default).
 
 Run ./freerouting -de board.frpcb.json -rm verify -do report.txt before -rm
 finish: finish makes existing copper unfixable, so a violation already present

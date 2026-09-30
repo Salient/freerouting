@@ -31,6 +31,7 @@ import eu.mihosoft.freerouting.board.Unit;
 import eu.mihosoft.freerouting.autoroute.BatchAutorouter;
 import eu.mihosoft.freerouting.autoroute.BatchFanout;
 import eu.mihosoft.freerouting.autoroute.BatchOptRoute;
+import eu.mihosoft.freerouting.autoroute.BoardScore;
 import eu.mihosoft.freerouting.logger.FRLogger;
 
 /**
@@ -117,6 +118,21 @@ public class BatchAutorouterThread extends InteractiveActionThread
                         " " + resources.getString("connections_not_found");
                 hdlg.screen_messages.set_status_message(end_message);
             }
+
+            // Batch run summary: BoardScore is the single source of the quality objective (see
+            // BoardScore's javadoc) -- report it once here so every batch run's outcome is
+            // visible regardless of test level, the same way BatchOptRoute now reports it
+            // around its postroute pass.
+            hdlg.remove_ratsnest();
+            int final_incomplete_count = hdlg.get_ratsnest().incomplete_count();
+            BoardScore.of(hdlg.get_routing_board(), final_incomplete_count).log("Batch run result");
+            // The last pass number BatchAutorouter.autoroute_passes() recorded is exactly the
+            // value -sp expects to resume with the same ripup-cost weights (NOT a checkpoint --
+            // the board itself is whatever the next run's -de loads).
+            int last_pass_no = hdlg.get_settings().autoroute_settings.get_start_pass_no();
+            FRLogger.info("Last recorded ripup pass number: " + last_pass_no
+                    + ". Resume with -sp " + last_pass_no + " for the same ripup-cost weights"
+                    + (this.is_stop_requested() ? " (this run was interrupted, so that pass may be incomplete)." : "."));
 
             hdlg.set_board_read_only(saved_board_read_only);
             hdlg.update_ratsnest();
