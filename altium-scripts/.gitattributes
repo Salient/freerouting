@@ -1,2 +1,2 @@
-altium-scripts/*.pas -text
-altium-scripts/*.PrjScr -text
+*.pas -text
+*.PrjScr -text
