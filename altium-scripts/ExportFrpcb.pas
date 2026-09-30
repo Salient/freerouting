@@ -2061,6 +2061,7 @@ Var
     ExitCode     : Integer;
     RteLines     : TStringList;
     RteLineCount : Integer;
+    ConstraintsPath : String;
 Begin
     Board := PCBServer.GetCurrentPCBBoard;
     If Board = Nil Then
@@ -2101,15 +2102,38 @@ Begin
         Exit;
     End;
 
-    // Absolute, always-quoted paths for -de/-do: StartupOptions.java matches
-    // flags with startsWith and silently keeps the default for any value that
-    // begins with '-', with no error. A path starting with '-' is not
-    // realistic here, but -rm's value is a literal we control, so it is kept
-    // dash-free on principle. -dc is deliberately omitted: unlike a plain
-    // Specctra DSN export, this board's clearance matrix is already inside
-    // FrpcbPath (see WriteClearanceMatrix), so there is no separate
-    // Constraints.xml for -dc to point at.
-    CmdLine := '"' + LauncherPath + '" -de "' + FrpcbPath + '" -do "' + RtePath + '" -rm reroute';
+    // -dc IS REQUIRED. Class-to-class clearances are NOT in the .frpcb.json:
+    // WriteClearanceMatrix emits the legacy PCB_Rule matrix, which on this
+    // project holds only a stale 8/10 mil default. The real, enforced matrix
+    // lives in Altium's Constraint Manager store, Constraints.xml, and reaches
+    // freerouting only via -dc. DoExportFrpcb's own interactive message says
+    // precisely this ('Class-to-class clearances are NOT in this file').
+    //
+    // freerouting will fall back to a Constraints.xml sitting next to the design
+    // file, but in batch mode (-de) a miss is only a log warning - it routes on
+    // whatever the JSON carried and exits 0. On a high-voltage board that means
+    // silently routing to clearances understated by 2.5x to 25x, which is the
+    // exact defect this whole pipeline exists to fix. So find it here and pass it
+    // explicitly, and refuse to run rather than produce confidently-wrong copper.
+    ConstraintsPath := ExtractFilePath(Board.FileName) + 'Constraints.xml';
+    If Not FileExists(ConstraintsPath) Then
+    Begin
+        ShowMessage('Constraints.xml was not found next to the board:' + #13#10 +
+            ConstraintsPath + #13#10 + #13#10 +
+            'That file holds the real class-to-class clearances - the .frpcb.json does ' +
+            'not. Routing without it would use a stale default matrix and produce ' +
+            'copper that violates the spacing this design requires.' + #13#10 + #13#10 +
+            'In Altium, save the project (Altium rewrites Constraints.xml on save, not ' +
+            'on every edit) so it appears beside the PCB document, then run this again.');
+        Exit;
+    End;
+
+    // Absolute, always-quoted paths throughout: StartupOptions.java matches flags
+    // with startsWith and silently keeps the default for any value that begins
+    // with '-', with no error. -rm's value is a literal we control, so it is kept
+    // dash-free on principle.
+    CmdLine := '"' + LauncherPath + '" -de "' + FrpcbPath + '" -do "' + RtePath +
+        '" -dc "' + ConstraintsPath + '" -rm reroute';
     If FREEROUTING_MAX_SECONDS > 0 Then
         CmdLine := CmdLine + ' -mt ' + IntToStr(FREEROUTING_MAX_SECONDS);
 
