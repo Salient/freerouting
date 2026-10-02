@@ -38,7 +38,6 @@ import eu.mihosoft.freerouting.datastructures.Stoppable;
 import eu.mihosoft.freerouting.datastructures.TimeLimit;
 
 import eu.mihosoft.freerouting.board.SearchTreeObject;
-import eu.mihosoft.freerouting.board.Connectable;
 import eu.mihosoft.freerouting.board.Item;
 import eu.mihosoft.freerouting.board.RoutingBoard;
 import eu.mihosoft.freerouting.board.ShapeSearchTree;
@@ -164,31 +163,38 @@ public class AutorouteEngine
         // unchanged, but weighted_trace_length went from 425767932 to 1137175111 -- a real,
         // reproducible ~2.7x regression on a board where NOTHING was actually blocked
         // (incomplete=0 both times). The cause is exactly the risk flagged for this task:
-        // is_destination_reachable's own room-building mutates this engine's shared room list
-        // and search tree before MazeSearchAlgo.init gets to build the start rooms, so the
-        // start side's rooms complete in a different shape than they would have, and a
-        // different (worse) route gets found even though nothing was blocked. So this runs
-        // here instead: strictly after a failed search, only to relabel a NOT_ROUTED result as
-        // BLOCKED when it is provably so. The corresponding cost is that it no longer saves the
-        // failed search's own time budget on the FIRST pass a doomed connection is attempted --
-        // only BatchAutorouter's permanent-skip registry benefit (no more repeat attempts on
-        // later passes) still applies.
+        // room-building mutates this engine's shared room list and search tree before
+        // MazeSearchAlgo.init gets to build the start rooms, so the start side's rooms complete
+        // in a different shape than they would have, and a different (worse) route gets found
+        // even though nothing was blocked. So this runs here instead: strictly after a failed
+        // search, only to relabel a NOT_ROUTED result as BLOCKED when it is provably so. The
+        // corresponding cost is that it no longer saves the failed search's own time budget on
+        // the FIRST pass a doomed connection is attempted -- only BatchAutorouter's
+        // permanent-skip registry benefit (no more repeat attempts on later passes) still
+        // applies.
+        //
+        // RoomReachabilityAlgo.check (task 10) subsumes what used to be a pad-adjacency-only
+        // check here (is_destination_reachable): it still answers "does any destination item
+        // have free space to enter from", but if so it keeps going, flood-filling the expansion
+        // room graph through doors to see whether that free space actually connects anywhere
+        // back to a start item, rather than stopping at the first door. See its class javadoc.
         boolean search_failed = (autoroute_result == null);
-        boolean destination_reachable = true;
+        RoomReachabilityAlgo.Verdict reachability = RoomReachabilityAlgo.Verdict.REACHABLE;
         if (search_failed)
         {
             try
             {
-                destination_reachable = this.is_destination_reachable(p_dest_set, p_ctrl);
+                reachability = RoomReachabilityAlgo.check(p_start_set, p_dest_set, this, p_ctrl);
             } catch (Exception e)
             {
                 // Fail open: a bug in this classification must never turn a connection the
                 // unmodified search actually could have routed (on a later pass) into one that
                 // gets permanently skipped. Worst case on an exception here is the pre-existing
                 // behaviour: report plain NOT_ROUTED and let the next pass try again.
-                FRLogger.error("AutorouteEngine.autoroute_connection: Exception in is_destination_reachable", e);
-                destination_reachable = true;
+                FRLogger.error("AutorouteEngine.autoroute_connection: Exception in RoomReachabilityAlgo.check", e);
+                reachability = RoomReachabilityAlgo.Verdict.REACHABLE;
             }
+            this.last_blocked_reason = reachability;
         }
         if (!this.maintain_database)
         {
@@ -200,6 +206,7 @@ public class AutorouteEngine
         }
         if (search_failed)
         {
+            boolean destination_reachable = (reachability == RoomReachabilityAlgo.Verdict.REACHABLE);
             return destination_reachable ? AutorouteResult.NOT_ROUTED : AutorouteResult.BLOCKED;
         }
         if (autoroute_result.connection_items == null)
@@ -633,168 +640,18 @@ public class AutorouteEngine
     }
 
     /**
-     * Destination-side counterpart of what {@code MazeSearchAlgo.init} already does for start
-     * items -- used to classify a search failure as BLOCKED (provably unroutable) rather than
-     * plain NOT_ROUTED.
-     * <p>
-     * Background: {@code MazeSearchAlgo.init} builds an {@link IncompleteFreeSpaceExpansionRoom}
-     * from each start item's own connection shape, completes it via
-     * {@link #complete_expansion_room}, and requires at least one completed room to actually
-     * come back with a usable door before it will even seed the maze search. A destination item
-     * that has zero free space around it (fully enclosed, no possible entry point on any layer)
-     * gets none of that: {@code init} only ever records its bounding box for the distance
-     * heuristic. So the maze search runs anyway, and correctly explores the entire board before
-     * giving up, which is the "hang on a connection with no incomplete-detected problem"
-     * symptom this method exists to catch.
-     * <p>
-     * <b>Called only from {@link #autoroute_connection}, and only after the maze search has
-     * already run and failed (see the comment there) -- deliberately NOT as a pre-search
-     * early-out.</b> An earlier version of this method WAS called before
-     * {@code MazeSearchAlgo.get_instance}, exactly mirroring how start items are validated
-     * before the search is even constructed; that is what would actually fix the "wastes its
-     * full time budget on an unreachable destination" symptom, since skipping the search
-     * entirely is the only way to also skip its cost. It was reverted after measurement: on
-     * {@code tests/pic_programmer.dsn} with {@code -mp 5}, incomplete and via counts were
-     * unchanged, but weighted_trace_length went from 425767932 to 1137175111 (deterministically,
-     * both runs -- {@code MazeSearchAlgo}'s ripup randomness is seeded from
-     * {@code ctrl.ripup_costs}, not wall-clock, so this was a real, reproducible effect, not
-     * noise) on a board where incomplete=0 both before and after, i.e. nothing was actually
-     * blocked. The cause is exactly the risk this task flagged up front: this method's own
-     * room-building mutates the engine's shared room list and search tree (see
-     * {@link #complete_expansion_room}'s "room shapes depend on completion order" javadoc), so
-     * running it before {@code MazeSearchAlgo.init} builds the start rooms changed their shapes,
-     * and so which route got found, even on connections it did not block. Running it only after
-     * a failed search still lets BatchAutorouter's permanent-skip registry avoid re-attempting a
-     * provably-blocked connection on every remaining pass; it just no longer saves that
-     * connection's own first failed search.
-     * <p>
-     * This mirrors the start-side check as closely as possible -- same room-building call, same
-     * "did a target door come back" test -- specifically so it inherits the same behaviour
-     * rather than approximating it with separate logic. It does NOT touch the maze search
-     * (MazeSearchAlgo) itself in any way; it only relabels a result the search already produced.
-     * <p>
-     * Neck-down: a door too narrow for a full-width trace can still be entered at neck-down
-     * width (see {@code AutorouteControl.with_neckdown} and
-     * {@code MazeSearchAlgo.check_neck_down_at_dest_pin}), but that width relaxation is a
-     * dynamic, per-door decision made deep inside the maze search's own expansion logic, which
-     * this method must not reproduce (that would be changing the maze search, not adding a
-     * check around it). Instead, any {@code Pin} with a non-zero neck-down half-width on
-     * with_neckdown is treated as reachable without running the geometric check at all: this
-     * static check has no way to know whether neck-down would have rescued it, and reporting a
-     * fine-pitch, neck-down-reliant pin as BLOCKED because a full-width room did not fit would
-     * be exactly the false positive the task warned about. Reporting it as reachable in that
-     * case is always safe -- it only costs falling back to the pre-existing (slower) behaviour.
-     *
-     * @return false only when every destination item was checked (none skipped by the
-     * neck-down exemption or by not being a {@link Connectable}) and none of them produced a
-     * completed room with a target door back to itself, i.e. every one of them has provably no
-     * free space to enter from, on any of its layers, given the board as it stands right now.
+     * Why the most recent {@link #autoroute_connection} call that returned
+     * {@code AutorouteResult.BLOCKED} was classified that way. Only meaningful immediately after
+     * such a call -- {@code BatchAutorouter} reads it right there to put a more specific reason
+     * in its log line (see {@code BatchAutorouter.note_blocked_connection}). Not reset between
+     * calls, so callers must not read it after a call that did NOT return BLOCKED.
      */
-    private boolean is_destination_reachable(Set<Item> p_destination_items, AutorouteControl p_ctrl)
+    public RoomReachabilityAlgo.Verdict get_last_blocked_reason()
     {
-        if (p_destination_items.isEmpty())
-        {
-            // An empty destination set is only ever valid for fanout (route to board edge / a
-            // plane, see MazeSearchAlgo.init's own is_fanout fallback); nothing for this method
-            // to prove or disprove.
-            return true;
-        }
-        for (Item curr_item : p_destination_items)
-        {
-            if (this.is_stop_requested())
-            {
-                // We did not actually finish checking, so we have not proven anything -- must
-                // not report a hard geometric fact off an incomplete check.
-                return true;
-            }
-            if (!(curr_item instanceof Connectable))
-            {
-                // No connection-shape-based room can be built for this item; nothing to check,
-                // so do not let it count against reachability.
-                return true;
-            }
-            if (neck_down_may_apply(curr_item, p_ctrl))
-            {
-                return true;
-            }
-            ItemAutorouteInfo curr_info = curr_item.get_autoroute_info();
-            curr_info.set_start_info(false);
-            int shape_count = curr_item.tree_shape_count(this.autoroute_search_tree);
-            for (int i = 0; i < shape_count; ++i)
-            {
-                TileShape contained_shape =
-                        ((Connectable) curr_item).get_trace_connection_shape(this.autoroute_search_tree, i);
-                if (contained_shape == null)
-                {
-                    continue;
-                }
-                int curr_layer = curr_item.shape_layer(i);
-                IncompleteFreeSpaceExpansionRoom new_room =
-                        this.add_incomplete_expansion_room(null, curr_layer, contained_shape);
-                Collection<CompleteFreeSpaceExpansionRoom> completed_rooms = this.complete_expansion_room(new_room);
-                for (CompleteFreeSpaceExpansionRoom curr_room : completed_rooms)
-                {
-                    for (TargetItemExpansionDoor curr_door : curr_room.get_target_doors())
-                    {
-                        if (curr_door.item == curr_item)
-                        {
-                            // Found at least one destination item with a real entry point.
-                            // That's enough: MazeSearchAlgo's own destination_ok logic already
-                            // treats the destination set as satisfied by any single reachable
-                            // item, so mirror that instead of insisting on all of them.
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-        return false;
+        return this.last_blocked_reason;
     }
 
-    /**
-     * True if p_item is a Pin whose pad is narrow enough that the maze search's own neck-down
-     * relaxation (see the class javadoc of {@link #is_destination_reachable}) might let a trace
-     * enter it even where a full-width room would not fit. Always false when neck-down is
-     * disabled in p_ctrl.
-     * <p>
-     * {@code Pin.get_trace_neckdown_halfwidth} is NOT a "0 means not applicable" signal --
-     * {@code Math.max(0.5 * get_min_width(p_layer) - 1, 1)} floors at 1, so it returns a
-     * positive number for every Pin regardless of pad size. Its own javadoc says it is "used
-     * when the pin width is smaller than the trace width", i.e. callers are expected to compare
-     * it against the actual trace half-width themselves -- which is exactly what
-     * {@code MazeSearchAlgo.expand_to_room_doors} does via
-     * {@code Math.min(half_width_add, neck_down_half_width)}: a large neckdown value on a
-     * normal-sized pad is simply not the smaller of the two and so changes nothing. An earlier
-     * version of this method checked only "{@code > 0}", which -- given the floor above -- made
-     * this exemption fire for literally every Pin whenever with_neckdown is on (the default),
-     * silently disabling the geometric check entirely. Caught by a synthetic-board smoke test
-     * (a pin pad fully covered by another net's pad, single-layer SMD) where the intended
-     * BLOCKED verdict never appeared; see AutorouteEngineDestinationReachabilityTest.
-     */
-    private static boolean neck_down_may_apply(Item p_item, AutorouteControl p_ctrl)
-    {
-        if (!p_ctrl.with_neckdown || !(p_item instanceof eu.mihosoft.freerouting.board.Pin))
-        {
-            return false;
-        }
-        eu.mihosoft.freerouting.board.Pin curr_pin = (eu.mihosoft.freerouting.board.Pin) p_item;
-        for (int curr_layer = p_item.first_layer(); curr_layer <= p_item.last_layer(); ++curr_layer)
-        {
-            if (curr_layer < 0 || curr_layer >= p_ctrl.compensated_trace_half_width.length)
-            {
-                continue;
-            }
-            int neckdown_half_width = curr_pin.get_trace_neckdown_halfwidth(curr_layer);
-            if (neckdown_half_width > 0 && neckdown_half_width < p_ctrl.compensated_trace_half_width[curr_layer])
-            {
-                // Only an actual relaxation counts: the real search takes
-                // min(normal_half_width, neckdown_half_width), so this pin only gets an easier
-                // time than a "normal" destination when neckdown's number is the smaller one.
-                return true;
-            }
-        }
-        return false;
-    }
+    private RoomReachabilityAlgo.Verdict last_blocked_reason = RoomReachabilityAlgo.Verdict.REACHABLE;
 
     /**
      * Checks, if the internal datastructure is valid.
@@ -889,13 +746,15 @@ public class AutorouteEngine
 
         ALREADY_CONNECTED, ROUTED, NOT_ROUTED, INSERT_ERROR,
         /**
-         * The maze search ran and failed (as NOT_ROUTED also indicates), and the
-         * destination-reachability check (see {@link #is_destination_reachable}, run
-         * immediately afterward -- see its javadoc for why it is not a pre-search early-out)
-         * then proved that no destination item has any free space to enter from. Distinct from
-         * plain NOT_ROUTED, which means only that the search did not find a connection this
+         * The maze search ran and failed (as NOT_ROUTED also indicates), and the room-graph
+         * connectivity check (see {@link RoomReachabilityAlgo}, run immediately afterward -- see
+         * the comment in {@link #autoroute_connection} for why it is not a pre-search early-out)
+         * then proved either that no destination item has any free space to enter from, or that
+         * it does but no chain of doors connects that free space to any start item. Distinct
+         * from plain NOT_ROUTED, which means only that the search did not find a connection this
          * time -- that is not proof of impossibility (ripup freedom grows with the pass
-         * number), whereas BLOCKED is a geometric fact about the board as it stands.
+         * number), whereas BLOCKED is a geometric fact about the board as it stands. See
+         * {@link #get_last_blocked_reason()} for which of the two it was.
          */
         BLOCKED
     }
