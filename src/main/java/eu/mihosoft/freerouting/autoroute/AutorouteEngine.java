@@ -115,6 +115,45 @@ public class AutorouteEngine
     public AutorouteResult autoroute_connection(Set<Item> p_start_set, Set<Item> p_dest_set,
             AutorouteControl p_ctrl, SortedSet<Item> p_ripped_item_list)
     {
+        // Stage 2 (experimental, see the task report): a pre-search connectivity check on a
+        // throwaway AutorouteEngine, so that a provably-blocked connection can skip the maze
+        // search's own time budget entirely -- not just avoid repeat attempts on later passes,
+        // which is all the post-failure placement below can do. Deliberately a SEPARATE engine
+        // instance, not `this`: the whole reason Stage 1 runs after the search instead of before
+        // (see the big comment below) is that building rooms off the destination side first
+        // reshapes the start side's rooms, because room shapes depend on completion order. A
+        // throwaway engine builds its own rooms in its own private room list, backed by the same
+        // shared, cached-per-clearance-class search tree (SearchTreeManager.get_autoroute_tree)
+        // -- but then immediately tears them back out via its own clear() before `this` engine
+        // or MazeSearchAlgo ever touches the tree, so (if clear() is as complete as it looks)
+        // there should be nothing left for the real search to see.
+        if (STAGE_2_PRE_SEARCH_CHECK_ENABLED)
+        {
+            try
+            {
+                AutorouteEngine throwaway_engine = new AutorouteEngine(this.board, p_ctrl.trace_clearance_class_no, false);
+                // Needed for the tree lookups inside RoomReachabilityAlgo.check to use the right
+                // net: a fresh AutorouteEngine's net_no defaults to -1 until init_connection sets
+                // it, and -1 never matches any item's real net, which would make every
+                // contains_net/is_trace_obstacle check come out wrong.
+                throwaway_engine.init_connection(p_ctrl.net_no, this.stoppable_thread, this.time_limit);
+                RoomReachabilityAlgo.Verdict pre_search_verdict =
+                        RoomReachabilityAlgo.check(p_start_set, p_dest_set, throwaway_engine, p_ctrl);
+                throwaway_engine.clear();
+                if (pre_search_verdict != RoomReachabilityAlgo.Verdict.REACHABLE)
+                {
+                    this.last_blocked_reason = pre_search_verdict;
+                    return AutorouteResult.BLOCKED;
+                }
+            } catch (Exception e)
+            {
+                // Fail open, same reasoning as the post-search placement below: never let a bug
+                // here turn a connection the unmodified search could have routed into one that
+                // gets permanently skipped. Just fall through to the normal search.
+                FRLogger.error("AutorouteEngine.autoroute_connection: Exception in Stage 2 pre-search RoomReachabilityAlgo.check", e);
+            }
+        }
+
         MazeSearchAlgo maze_search_algo;
         try
         {
@@ -713,6 +752,20 @@ public class AutorouteEngine
      */
     public final boolean maintain_database;
     static final int TRACE_WIDTH_TOLERANCE = 2;
+    /**
+     * Switch for Stage 2 (see the comment at the top of {@link #autoroute_connection}). Enabled:
+     * the acceptance test passed. With this flipped on, BoardScore (incomplete count, via count,
+     * weighted trace length, corner count) AND the produced .rte came back byte-for-byte
+     * identical to the unmodified baseline on all 4 of the task's sample boards (pic_programmer,
+     * Issue22-AutoRouter_interrupted, Issue29-hw48na, Issue15-StackOverflow) at {@code -mp 5} --
+     * i.e. {@link AutorouteEngine#clear()} on a throwaway engine really does leave no trace in
+     * the shared, cached-per-clearance-class search tree, confirming empirically what the task
+     * description only hypothesized. Wall-clock time across those 4 runs also came back within
+     * normal run-to-run variance of the Stage-1-only numbers (no measured slowdown from running
+     * this on every connection attempt, not just failed ones) -- see the task report for the
+     * actual before/after numbers on both counts.
+     */
+    static final boolean STAGE_2_PRE_SEARCH_CHECK_ENABLED = true;
     /**
      * The net number used for routing in this autoroute algorithm.
      */
