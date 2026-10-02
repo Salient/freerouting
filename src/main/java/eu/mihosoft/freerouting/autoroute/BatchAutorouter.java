@@ -405,7 +405,7 @@ public class BatchAutorouter
             }
             else if (autoroute_result == AutorouteEngine.AutorouteResult.BLOCKED)
             {
-                note_blocked_connection(connection_key, p_item, p_route_net_no);
+                note_blocked_connection(connection_key, p_item, p_route_net_no, autoroute_engine.get_last_blocked_reason());
             }
             else if (autoroute_result == AutorouteEngine.AutorouteResult.NOT_ROUTED)
             {
@@ -430,13 +430,17 @@ public class BatchAutorouter
 
     /**
      * Records a newly-discovered BLOCKED connection and logs it once, with the net name (not
-     * just its number) and enough context to find the item in Altium, per the user's request to
-     * surface identified-impossible routes in the log. blocked_registry.is_blocked is checked at
-     * the top of autoroute_item before this can be reached again for the same connection, and
-     * mark_blocked itself reports whether this is the first time -- belt and suspenders against
-     * double-logging the same connection on a later pass.
+     * just its number), enough context to find the item in Altium, and WHY it was flagged, per
+     * the user's request to surface identified-impossible routes in the log and to distinguish
+     * the two different things a BLOCKED verdict can mean (see
+     * {@code RoomReachabilityAlgo.Verdict}) -- they point the user at very different problems on
+     * their board. blocked_registry.is_blocked is checked at the top of autoroute_item before
+     * this can be reached again for the same connection, and mark_blocked itself reports whether
+     * this is the first time -- belt and suspenders against double-logging the same connection on
+     * a later pass.
      */
-    private void note_blocked_connection(ConnectionKey p_key, Item p_item, int p_route_net_no)
+    private void note_blocked_connection(ConnectionKey p_key, Item p_item, int p_route_net_no,
+            RoomReachabilityAlgo.Verdict p_reason)
     {
         if (!this.blocked_registry.mark_blocked(p_key))
         {
@@ -444,9 +448,23 @@ public class BatchAutorouter
         }
         eu.mihosoft.freerouting.rules.Net route_net = routing_board.rules.nets.get(p_route_net_no);
         String net_name = route_net == null ? ("<unnamed net " + p_route_net_no + ">") : route_net.name;
+        String reason_text;
+        if (p_reason == RoomReachabilityAlgo.Verdict.PAD_UNREACHABLE)
+        {
+            reason_text = "no free space found around any destination item on any layer of the current board";
+        }
+        else
+        {
+            // NO_CORRIDOR (or, defensively, anything else): free space exists immediately around
+            // the destination, but it is sealed into a pocket -- no chain of connected free
+            // space, through doors a trace could use (ripping up any trace or via blocking the
+            // way), reaches a start item.
+            reason_text = "free space exists around the destination item, but it is sealed into a"
+                    + " pocket -- no path through connected free space, ripping up traces and vias"
+                    + " where allowed, reaches the rest of the connection";
+        }
         FRLogger.warn("BatchAutorouter: connection provably unroutable on net '" + net_name
-                + "' at " + describe_item(p_item) + " -- no free space found around any"
-                + " destination item on any layer of the current board. Ripup cannot change a"
+                + "' at " + describe_item(p_item) + " -- " + reason_text + ". Ripup cannot change a"
                 + " purely geometric fact like this, so it will be skipped on all remaining"
                 + " passes instead of re-attempted.");
     }
