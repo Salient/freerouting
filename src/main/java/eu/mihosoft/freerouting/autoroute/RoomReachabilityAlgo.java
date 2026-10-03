@@ -112,6 +112,45 @@ final class RoomReachabilityAlgo
      * rooms to find it -- fails open (reports REACHABLE, i.e. "do not flag"), which is the safe
      * direction required by the task regardless of where this number is set.
      */
+    /**
+     * How the check has actually behaved this run, so a "nothing blocked" result can be told
+     * apart from a check that never completed. Counters rather than per-call logging: this runs
+     * once per failed connection and per-call output would bury the run.
+     */
+    private static int checks_attempted = 0;
+    private static int checks_completed = 0;
+    private static int fills_found_a_corridor = 0;
+    private static int fills_out_of_budget = 0;
+
+    /** One line for the end-of-run report. Null when the check never ran at all. */
+    public static String activity_summary()
+    {
+        if (checks_attempted == 0)
+        {
+            return null;
+        }
+        int bailed_before_fill = checks_attempted - checks_completed;
+        return "Reachability checks: " + checks_attempted + " attempted, "
+                + fills_found_a_corridor + " found a corridor, "
+                + (checks_completed - fills_found_a_corridor - fills_out_of_budget)
+                + " proved none, " + fills_out_of_budget + " ran out of budget (room cap "
+                + MAX_ROOMS + ", " + TIME_LIMIT_MILLISECONDS + "ms), "
+                + bailed_before_fill + " not modellable."
+                + (fills_out_of_budget > 0
+                    ? " Budget exhaustion means those connections were NOT proven routable,"
+                        + " only not proven blocked."
+                    : "");
+    }
+
+    /** Resets the counters, so each batch run reports its own activity. */
+    public static void reset_activity()
+    {
+        checks_attempted = 0;
+        checks_completed = 0;
+        fills_found_a_corridor = 0;
+        fills_out_of_budget = 0;
+    }
+
     static final int MAX_ROOMS = 2000;
 
     /**
@@ -140,6 +179,7 @@ final class RoomReachabilityAlgo
     static Verdict check(Set<Item> p_start_items, Set<Item> p_destination_items,
             AutorouteEngine p_autoroute_engine, AutorouteControl p_ctrl)
     {
+        ++checks_attempted;
         if (p_destination_items.isEmpty())
         {
             // An empty destination set is only ever valid for fanout (route to board edge / a
@@ -181,11 +221,20 @@ final class RoomReachabilityAlgo
         RoomExpander expander = p_autoroute_engine::complete_neigbour_rooms;
 
         FloodResult result = flood_fill(seed_rooms, touches_start_item, expander, MAX_ROOMS, out_of_budget);
+        ++checks_completed;
         switch (result)
         {
             case FOUND:
+                ++fills_found_a_corridor;
                 return Verdict.REACHABLE;
             case BUDGET_EXCEEDED:
+                // Fails open, and that is correct - but it must be COUNTED. Without this,
+                // "nothing on this board is blocked" and "the fill never once finished" produce
+                // an identical log, which makes the whole check unfalsifiable on exactly the
+                // dense boards it was built for. On the 6-layer reference board it reported
+                // zero blocked connections, and there was no way to tell which of those two
+                // things had happened.
+                ++fills_out_of_budget;
                 return Verdict.REACHABLE;
             case EXHAUSTED:
                 return Verdict.NO_CORRIDOR;

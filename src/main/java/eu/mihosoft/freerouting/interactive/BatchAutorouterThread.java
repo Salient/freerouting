@@ -136,6 +136,16 @@ public class BatchAutorouterThread extends InteractiveActionThread
             int final_incomplete_count = hdlg.get_ratsnest().incomplete_count();
             int final_blocked_count = this.batch_autorouter.get_blocked_connection_count();
             BoardScore.of(hdlg.get_routing_board(), final_incomplete_count, final_blocked_count).log("Batch run result");
+            // How the reachability check actually behaved this run. Reported unconditionally
+            // because its failure mode is silence: it fails open when it runs out of room or
+            // time budget, so without this a board on which every fill gave up looks exactly
+            // like a board with nothing wrong. On the 6-layer reference board it reported zero
+            // blocked connections and there was no way to tell those two cases apart.
+            String reachability = this.batch_autorouter.get_reachability_summary();
+            if (reachability != null)
+            {
+                FRLogger.info(reachability);
+            }
             // Repeated-failure visibility asked for by the task: NOT a give-up rule (see
             // BatchAutorouter.not_routed_pass_counts' javadoc for why ripup freedom growing with
             // the pass number means this is not proof of impossibility), just a count so a human

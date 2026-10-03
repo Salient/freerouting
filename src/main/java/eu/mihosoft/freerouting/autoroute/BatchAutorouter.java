@@ -118,6 +118,8 @@ public class BatchAutorouter
      */
     public boolean autoroute_passes()
     {
+        // Per-run counters, so the end-of-run summary describes THIS run.
+        RoomReachabilityAlgo.reset_activity();
         java.util.ResourceBundle resources =
                 java.util.ResourceBundle.getBundle("eu.mihosoft.freerouting.interactive.InteractiveState", hdlg.get_locale());
         boolean still_unrouted_items = true;
@@ -581,6 +583,15 @@ public class BatchAutorouter
      * autoroute_item multiplies start_ripup_costs by the pass number.
      */
     private int last_main_pass_no = -1;
+
+    /**
+     * One line describing how the reachability check behaved this run, or null if it never ran.
+     * Delegated through here so RoomReachabilityAlgo can stay package-private.
+     */
+    public String get_reachability_summary()
+    {
+        return RoomReachabilityAlgo.activity_summary();
+    }
 
     /** See last_main_pass_no. Returns -1 if the main loop never ran a pass. */
     public int get_last_main_pass_no()
