@@ -53,6 +53,19 @@ import eu.mihosoft.freerouting.logger.FRLogger;
 public final class BoardScore implements Comparable<BoardScore>
 {
     /** Number of connections not yet routed (from the board's ratsnest). */
+    /**
+     * NOT COMPARABLE ACROSS -rm MODES, for the weighted-length term.
+     *
+     * <p>calc_weighted_trace_length counts only UNFIXED and SHOVE_FIXED traces, because the
+     * optimiser it came from can only move those. In -rm finish the imported copper is
+     * USER_FIXED, so the figure covers ONLY the newly routed traces: measured on the reference
+     * board it reads 0 before routing and 88,900,508 after, against 55,655,452,702 for the same
+     * board in -rm reroute where everything is movable. A 600x difference that is not a
+     * regression.
+     *
+     * <p>So compare like with like: same board AND same -rm mode. incomplete_count, via_count
+     * and corner_count have no such caveat - they count the whole board either way.
+     */
     public final int incomplete_count;
     /** Number of vias currently on the board. */
     public final int via_count;
