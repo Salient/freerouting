@@ -523,15 +523,22 @@ public class BatchAutorouter
      */
     public FloatLine get_air_line()
     {
-        if (this.air_line == null)
+        // Read the field ONCE. This is called from the Swing thread (via
+        // BatchAutorouterThread.draw) while the router thread writes it, and the previous
+        // version read this.air_line four separate times: it could check one FloatLine for
+        // null endpoints and then return a DIFFERENT one that had just replaced it. calc_airline
+        // can legitimately build a line with a null endpoint, so the caller then drew a null
+        // coordinate and CoordinateTransform.board_to_screen threw
+        // "Cannot invoke FloatPoint.rotate(...) because p_point is null".
+        //
+        // It showed up on clicking Stop, which is exactly when the router nulls air_line while
+        // the last repaint is still in flight.
+        FloatLine result = this.air_line;
+        if (result == null || result.a == null || result.b == null)
         {
             return null;
         }
-        if (this.air_line.a == null || this.air_line.b == null)
-        {
-            return null;
-        }
-        return this.air_line;
+        return result;
     }
 
     private void calc_airline(Collection<Item> p_from_items, Collection<Item> p_to_items)
@@ -610,6 +617,11 @@ public class BatchAutorouter
 
     private final int start_ripup_costs;
     /** Used to draw the airline of the current routed incomplete. */
-    private FloatLine air_line = null;
+    /**
+     * Volatile because the Swing thread reads it for drawing while this thread writes it. Not a
+     * lock: a torn or stale read here only ever means one frame draws a slightly old air line,
+     * which is harmless, whereas the non-atomic null check it used to have was not.
+     */
+    private volatile FloatLine air_line = null;
     private static final int TIME_LIMIT_TO_PREVENT_ENDLESS_LOOP = 1000;
 }

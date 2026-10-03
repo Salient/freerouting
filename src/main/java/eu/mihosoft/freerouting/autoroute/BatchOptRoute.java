@@ -258,15 +258,20 @@ public class BatchOptRoute
      */
     public FloatPoint get_current_position()
     {
-        if (sorted_route_items == null)
+        // Single read, for the same reason as BatchAutorouter.get_air_line: the Swing thread
+        // calls this for drawing while this thread runs, and opt_route_pass sets
+        // sorted_route_items to null at the end of every pass. Reading the field twice let the
+        // null check pass and the dereference then hit null.
+        ReadSortedRouteItems items = this.sorted_route_items;
+        if (items == null)
         {
             return null;
         }
-        return sorted_route_items.get_current_position();
+        return items.get_current_position();
     }
     private final InteractiveActionThread thread;
     private final RoutingBoard routing_board;
-    private ReadSortedRouteItems sorted_route_items;
+    private volatile ReadSortedRouteItems sorted_route_items;
     private boolean use_increased_ripup_costs; // in the first passes the ripup costs are icreased for better performance.
     private double min_cumulative_trace_length_before = 0;
     private static int MAX_AUTOROUTE_PASSES = 6;
