@@ -46,6 +46,7 @@ import java.util.TreeSet;
 import eu.mihosoft.freerouting.logger.FRLogger;
 import eu.mihosoft.freerouting.rules.ClearanceMatrix;
 
+import eu.mihosoft.freerouting.datastructures.ArrayStack;
 import eu.mihosoft.freerouting.datastructures.Signum;
 
 import eu.mihosoft.freerouting.autoroute.IncompleteFreeSpaceExpansionRoom;
@@ -665,14 +666,17 @@ public class ShapeSearchTree extends eu.mihosoft.freerouting.datastructures.MinA
                     p_room.get_layer(), p_room.get_contained_shape());
             result.add(new_room);
         }
-        this.node_stack.reset();
-        this.node_stack.push(this.root);
+        // Local, not the shared instance field this used to be - see MinAreaTree.overlaps
+        // for the full reasoning. A shared scratch stack makes two interleaved traversals
+        // of one tree corrupt each other silently.
+        ArrayStack<TreeNode> node_stack = new ArrayStack<TreeNode>(10000);
+        node_stack.push(this.root);
         TreeNode curr_node;
         int room_layer = p_room.get_layer();
 
         for (;;)
         {
-            curr_node = this.node_stack.pop();
+            curr_node = node_stack.pop();
             if (curr_node == null)
             {
                 break;
@@ -724,8 +728,8 @@ public class ShapeSearchTree extends eu.mihosoft.freerouting.datastructures.MinA
                 }
                 else
                 {
-                    this.node_stack.push(((InnerNode) curr_node).first_child);
-                    this.node_stack.push(((InnerNode) curr_node).second_child);
+                    node_stack.push(((InnerNode) curr_node).first_child);
+                    node_stack.push(((InnerNode) curr_node).second_child);
                 }
             }
         }

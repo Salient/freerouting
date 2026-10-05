@@ -64,12 +64,22 @@ public class MinAreaTree extends ShapeTree
         {
             return found_overlaps;
         }
-        this.node_stack.reset();
-        this.node_stack.push(this.root);
+        // Local, not the shared instance field this used to be. node_stack was a
+        // protected field on MinAreaTree, so every traversal of one tree - including
+        // pure READS like this one - took turns scribbling on the same scratch space.
+        // Two interleaved traversals corrupted each other silently: wrong results or
+        // an ArrayIndexOutOfBounds, never a clean failure. That made any concurrent
+        // search-tree read unsafe, which blocked every parallel scheme, and it was a
+        // latent bug regardless of threads.
+        //
+        // Allocation is not a concern here: the traversal that follows does far more
+        // work than one array allocation, and the depth is bounded by the tree.
+        ArrayStack<TreeNode> node_stack = new ArrayStack<TreeNode>(10000);
+        node_stack.push(this.root);
         TreeNode curr_node;
         for (;;)
         {
-            curr_node = this.node_stack.pop();
+            curr_node = node_stack.pop();
             if (curr_node == null)
             {
                 break;
@@ -82,8 +92,8 @@ public class MinAreaTree extends ShapeTree
                 }
                 else
                 {
-                    this.node_stack.push(((InnerNode)curr_node).first_child);
-                    this.node_stack.push(((InnerNode)curr_node).second_child);
+                    node_stack.push(((InnerNode)curr_node).first_child);
+                    node_stack.push(((InnerNode)curr_node).second_child);
                 }
             }
         }
@@ -250,6 +260,9 @@ public class MinAreaTree extends ShapeTree
         }
     }
     
-    protected ArrayStack<TreeNode> node_stack = new ArrayStack<TreeNode> (10000);
+    // node_stack used to live here as a protected field, shared by every traversal of this
+    // tree and by both ShapeSearchTree subclasses. It is now a local in each traversal - see
+    // the comment at the top of any of them. Do not reintroduce it: a shared scratch stack
+    // makes two concurrent reads of one tree corrupt each other with no exception.
 }
 
