@@ -169,6 +169,40 @@ public class MainApplication extends javax.swing.JFrame
                         ExportBoardToFile(startupOptions.design_output_filename);
                     }
 
+                    /**
+                     * Moves the freshly written temp file onto the target, and if the target is
+                     * locked keeps the result under a timestamped name instead of throwing it
+                     * away. Returns true when the routing has been preserved somewhere.
+                     *
+                     * <p>Altium holds a previously-imported .rte open, so an in-place write
+                     * fails with "being used by another process". Losing a completed routing run
+                     * to that is unacceptable - the run costs minutes, the lock costs nothing to
+                     * work around.
+                     */
+                    private boolean move_into_place(java.io.File p_temp, java.io.File p_target) {
+                        try {
+                            java.nio.file.Files.move(p_temp.toPath(), p_target.toPath(),
+                                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                            return true;
+                        } catch (java.io.IOException e) {
+                            String stamp = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss")
+                                    .format(new java.util.Date());
+                            java.io.File fallback = new java.io.File(p_target.getParentFile(),
+                                    p_target.getName() + "." + stamp + ".rte");
+                            if (p_temp.renameTo(fallback)) {
+                                FRLogger.warn("Could not replace '" + p_target
+                                        + "' - it is open in another program (Altium keeps an"
+                                        + " imported .rte locked). The routing was NOT lost: it"
+                                        + " is in '" + fallback + "'. Close the file in Altium"
+                                        + " and either rename that, or re-run.");
+                                return true;
+                            }
+                            FRLogger.error("Could not write '" + p_target + "' nor the fallback '"
+                                    + fallback + "'. The routing result is in '" + p_temp + "'.", e);
+                            return false;
+                        }
+                    }
+
                     private void ExportBoardToFile(String filename) {
                         if ((filename != null)
                                 && ((filename.toLowerCase().endsWith(".dsn"))
@@ -181,7 +215,32 @@ public class MainApplication extends javax.swing.JFrame
                                 String filename_only = new File(filename).getName();
                                 String design_name = filename_only.substring(0, filename_only.length() - 4);
 
-                                java.io.OutputStream output_stream = new java.io.FileOutputStream(filename);
+                                // Write to a sibling temp file, then move it into place. A
+                                // direct FileOutputStream on the target threw
+                                // FileNotFoundException("being used by another process") twice
+                                // on a live board, because Altium keeps a previously-imported
+                                // .rte open - and each failure silently discarded a completed
+                                // five-minute routing run. Routing is far too expensive to lose
+                                // to a file lock, so if the move cannot happen the result is
+                                // still kept under a timestamped name and the log says where.
+                                java.io.File target_file = new File(filename);
+                                java.io.File temp_file = new File(target_file.getParentFile(),
+                                        target_file.getName() + ".partial");
+                                java.io.OutputStream output_stream;
+                                try {
+                                    output_stream = new java.io.FileOutputStream(temp_file);
+                                } catch (java.io.IOException e) {
+                                    // Even the sibling temp file cannot be created - an
+                                    // unwritable directory, not just a locked target. Fall back
+                                    // to the system temp directory rather than lose the run:
+                                    // tested by making the output directory read-only, which
+                                    // otherwise failed here, BEFORE move_into_place could help.
+                                    temp_file = java.io.File.createTempFile(
+                                            target_file.getName() + ".", ".partial");
+                                    output_stream = new java.io.FileOutputStream(temp_file);
+                                    FRLogger.warn("Cannot write into '" + target_file.getParent()
+                                            + "' - staging the result in '" + temp_file + "'.");
+                                }
 
                                 if (filename.toLowerCase().endsWith(".dsn")) {
                                     new_frame.board_panel.board_handling.export_to_dsn_file(output_stream, design_name, false);
@@ -194,6 +253,18 @@ public class MainApplication extends javax.swing.JFrame
                                     new_frame.board_panel.board_handling.export_specctra_session_file(filename, session_output_stream);
                                     java.io.InputStream input_stream = new ByteArrayInputStream(session_output_stream.toByteArray());
                                     new_frame.board_panel.board_handling.export_eagle_session_file(input_stream, output_stream);
+                                }
+
+                                output_stream.close();
+                                if (!move_into_place(temp_file, target_file))
+                                {
+                                    // The result exists but not where it was asked for, and the
+                                    // log says where. Exit non-zero so a scripted caller knows
+                                    // to look - but DO exit: returning here left the process
+                                    // alive with a GUI nobody is watching, which is how an
+                                    // unwritable output directory turned into a hang (exit 124
+                                    // under timeout) instead of a diagnosable failure.
+                                    Runtime.getRuntime().exit(3);
                                 }
 
                                 Runtime.getRuntime().exit(0);
