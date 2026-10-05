@@ -145,10 +145,17 @@ class BoardPanelStatus extends javax.swing.JPanel
         // may be compressed to when the window is too narrow for everyone's preference. That
         // pair is the whole fix - pinning minimum == maximum == preferred, as this used to,
         // made the fields incompressible and forced the message to absorb every shortfall.
-        flex_width(mouse_position, 175, 70);   // "x= 14432.5  y= 13880.0"      mono 154
-        flex_width(pass_message, 70, 32);      // "Pass 12"                     mono  49
-        flex_width(add_message, 210, 60);      // "to route: 532, routed: 10, " mono 189
-        flex_width(current_layer, 200, 60);    // "current layer: Sig [Horiz]"  mono 182
+        // Widths MEASURED with FontMetrics against the worst realistic string each field
+        // shows, PLUS its 16px of border insets. Forgetting the insets is what clipped
+        // add_message to "to route: 980, routed: 1..." on a live board: it needs 210px of
+        // text plus 16 of padding and was reserved exactly 210.
+        //
+        // Sized for four-digit counts, not the three-digit examples these were first measured
+        // against - a 980-item board routes more than 999 items once ripped ones are re-tried.
+        flex_width(mouse_position, 175, 70);   // "x= 14432.5  y= 13880.0"           154 + 16
+        flex_width(pass_message, 80, 32);      // "Pass 1234"                         63 + 16
+        flex_width(add_message, 226, 60);      // "to route: 9999, routed: 9999, "   210 + 16
+        flex_width(current_layer, 200, 60);    // "ripped: 9999, failed: 9999"       182 + 16
         // A floor for the message too, so the fields cannot take everything from it either.
         status_message.setMinimumSize(new java.awt.Dimension(
                 80, status_message.getPreferredSize().height));

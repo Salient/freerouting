@@ -276,6 +276,9 @@ public class FrpcbFile
         board.library.padstacks = new Padstacks(layer_structure);
         board.library.packages = new eu.mihosoft.freerouting.library.Packages(board.library.padstacks);
         Map<String, Padstack> padstacks_by_name = new HashMap<>();
+        // Drill diameters, in file units, for padstacks that have one. Only consulted for
+        // SHAPELESS padstacks, i.e. non-plated holes.
+        Map<String, Double> drill_by_padstack_name = new java.util.HashMap<>();
         JSONArray padstacks_arr = root.optJSONArray("padstacks");
         if (padstacks_arr != null)
         {
@@ -286,6 +289,13 @@ public class FrpcbFile
                 if (padstack != null)
                 {
                     padstacks_by_name.put(padstack.name, padstack);
+                    // Padstack itself does not retain the drill, and a shapeless padstack WITH a
+                    // drill is a non-plated hole that still blocks copper - see read_component.
+                    double ps_drill = ps_obj.optDouble("drill", 0);
+                    if (ps_drill > 0)
+                    {
+                        drill_by_padstack_name.put(padstack.name, ps_drill);
+                    }
                 }
             }
         }
@@ -410,7 +420,7 @@ public class FrpcbFile
         {
             for (int i = 0; i < components_arr.length(); ++i)
             {
-                read_component(components_arr.getJSONObject(i), board, padstacks_by_name, len);
+                read_component(components_arr.getJSONObject(i), board, padstacks_by_name, drill_by_padstack_name, len);
             }
         }
 
@@ -1212,7 +1222,53 @@ public class FrpcbFile
 
     // ---- components -----------------------------------------------------------
 
-    private static void read_component(JSONObject p_comp_obj, RoutingBoard p_board, Map<String, Padstack> p_padstacks_by_name, LengthConverter p_len)
+    /**
+     * Inserts a non-plated hole as an obstacle on every layer.
+     *
+     * <p>A shapeless padstack that has a drill is a hole with no copper - a mounting hole.
+     * It cannot be routed to, which is why it has no pad shape, but it is a physical hole
+     * through the board and no trace may cross it on any layer. Inserting it as a keepout is
+     * the only representation freerouting has for "copper may not go here"; there is no
+     * drill-only board item.
+     *
+     * <p>The alternative, skipping it, is what the importer used to do, and it let the router
+     * run traces straight through J2's two 56 mil mounting holes on all six layers.
+     */
+    private static void insert_non_plated_hole(RoutingBoard p_board, JSONObject p_pin_obj,
+            String p_comp_name, String p_padstack_name, double p_drill, LengthConverter p_len)
+    {
+        if (!p_pin_obj.has("x") || !p_pin_obj.has("y"))
+        {
+            FRLogger.warn("FrpcbFile: non-plated hole '" + p_pin_obj.optString("pin") + "' of '"
+                    + p_comp_name + "' has no location; it will NOT block routing.");
+            return;
+        }
+        int radius = (int) Math.round(p_len.to_board(p_drill / 2));
+        if (radius <= 0)
+        {
+            return;
+        }
+        eu.mihosoft.freerouting.geometry.planar.IntPoint centre =
+                p_len.to_board_point(p_pin_obj.optDouble("x", 0), p_pin_obj.optDouble("y", 0));
+        // Circle, exactly as read_padstack builds a round pad - and Circle already implements
+        // Area, so insert_obstacle takes it directly. Unlike a pad shape, which is relative to
+        // its pin, this one is placed at the hole's absolute board position.
+        eu.mihosoft.freerouting.geometry.planar.Area area = new Circle(centre, radius);
+        // The AREA clearance class, matching read_keepouts - a hole needs the same spacing
+        // treatment as any other region copper must avoid.
+        int clearance_class = p_board.rules.get_default_net_class()
+                .default_item_clearance_classes.get(ItemClass.AREA);
+        for (int layer = 0; layer < p_board.get_layer_count(); ++layer)
+        {
+            p_board.insert_obstacle(area, layer, clearance_class, FixedState.SYSTEM_FIXED);
+        }
+        FRLogger.info("FrpcbFile: pin '" + p_pin_obj.optString("pin") + "' of '" + p_comp_name
+                + "' is a non-plated hole (padstack '" + p_padstack_name + "', drill " + p_drill
+                + "); inserted as a keepout on all " + p_board.get_layer_count() + " layers.");
+    }
+
+    private static void read_component(JSONObject p_comp_obj, RoutingBoard p_board, Map<String, Padstack> p_padstacks_by_name,
+            Map<String, Double> p_drill_by_padstack_name, LengthConverter p_len)
     {
         String comp_name = p_comp_obj.optString("name", null);
         if (comp_name == null)
@@ -1313,9 +1369,26 @@ public class FrpcbFile
                 }
                 if (padstack.from_layer() > padstack.to_layer())
                 {
-                    // Shapeless padstack; nothing to insert as a board item, matching
-                    // Network.insert_component's handling of the same case for DSN.
-                    FRLogger.warn("FrpcbFile.read_component: skipping pin '" + pin_obj.optString("pin") + "' of component '" + comp_name + "' because its padstack '" + padstack_name + "' has no shape.");
+                    // A shapeless padstack with a DRILL is a non-plated hole - a mounting hole,
+                    // typically. It carries no copper, so it is not a pin and cannot be routed
+                    // to, which is why it has no shape. But it is still a hole through the
+                    // board, and no trace may cross it on ANY layer.
+                    //
+                    // Skipping it outright, as this used to, left the router free to route
+                    // straight through the hole on every layer. Found on a live board: J2's
+                    // MTH1/MTH2 mounting holes, padstack "nopad_56", a 56 mil drill with no
+                    // pad - the router had no idea they were there. That is a fabrication
+                    // defect, not a cosmetic one, so the hole is inserted as an obstacle on
+                    // every layer instead.
+                    Double drill = p_drill_by_padstack_name.get(padstack_name);
+                    if (drill != null && drill > 0)
+                    {
+                        insert_non_plated_hole(p_board, pin_obj, comp_name, padstack_name, drill, p_len);
+                    }
+                    else
+                    {
+                        FRLogger.warn("FrpcbFile.read_component: skipping pin '" + pin_obj.optString("pin") + "' of component '" + comp_name + "' because its padstack '" + padstack_name + "' has neither a shape nor a drill.");
+                    }
                     continue;
                 }
                 String net_name = pin_obj.optString("net", null);
