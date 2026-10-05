@@ -84,9 +84,10 @@ public class ClearanceViolations
                     continue;
                 }
                 boolean shares_net = curr_violation.first_item.shares_net(curr_violation.second_item);
+                boolean same_component = same_component(curr_violation.first_item, curr_violation.second_item);
                 double shortfall_mil = curr_violation.first_item.board.communication.coordinate_transform.board_to_dsn(
                         2 * curr_violation.shape.smallest_radius());
-                if (is_reportable(shares_net, shortfall_mil))
+                if (is_reportable(shares_net, same_component, shortfall_mil))
                 {
                     kept.add(curr_violation);
                 }
@@ -113,9 +114,33 @@ public class ClearanceViolations
      * list). Overlaps under {@link #MIN_REPORTED_OVERLAP_MIL} are rounding artifacts of the
      * integer clearance check, not design violations.
      */
-    static boolean is_reportable(boolean p_shares_net, double p_shortfall_mil)
+    static boolean is_reportable(boolean p_shares_net, boolean p_same_component, double p_shortfall_mil)
     {
-        return !p_shares_net && p_shortfall_mil >= MIN_REPORTED_OVERLAP_MIL;
+        return !p_shares_net && !p_same_component && p_shortfall_mil >= MIN_REPORTED_OVERLAP_MIL;
+    }
+
+    /**
+     * True if both items belong to the same component, which exempts the pair from
+     * clearance checking.
+     *
+     * <p>A footprint's internal pad spacing is fixed by the part, not by layout, so Altium does
+     * not apply clearance rules within a component and neither should this. Without the
+     * exemption every multi-row connector reports a violation per adjacent pad pair: J5 on the
+     * reference board is a 50 mil header with 44.5 mil pads, so adjacent rows leave a 5.5 mil
+     * edge gap against an 8 mil rule and each pair was flagged 2.5 mil short. Real geometry,
+     * real arithmetic, but not a routing error - there is nothing the router could do about it.
+     *
+     * <p>Measured on that board: 305 of the 306 pad pairs closer than 8 mil on different nets
+     * were within a single component. Exactly one was genuine.
+     *
+     * <p>Items with no component (traces, vias, free-standing copper) report
+     * get_component_no() <= 0, and those must never be treated as sharing a component with
+     * each other - otherwise this would exempt every trace-to-trace pair on the board.
+     */
+    static boolean same_component(Item p_first, Item p_second)
+    {
+        int first = p_first.get_component_no();
+        return first > 0 && first == p_second.get_component_no();
     }
 
     /**

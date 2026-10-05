@@ -29,9 +29,9 @@ public class ClearanceViolationsTest
     {
         // Two items on the same net are connected, not too close -- see the class-level note
         // on ClearanceViolations.is_reportable. A huge overlap must not override that.
-        assertFalse(ClearanceViolations.is_reportable(true, 1000.0));
-        assertFalse(ClearanceViolations.is_reportable(true, ClearanceViolations.MIN_REPORTED_OVERLAP_MIL));
-        assertFalse(ClearanceViolations.is_reportable(true, 0.0));
+        assertFalse(ClearanceViolations.is_reportable(true, false, 1000.0));
+        assertFalse(ClearanceViolations.is_reportable(true, false, ClearanceViolations.MIN_REPORTED_OVERLAP_MIL));
+        assertFalse(ClearanceViolations.is_reportable(true, false, 0.0));
     }
 
     @Test
@@ -39,18 +39,17 @@ public class ClearanceViolationsTest
     {
         // freerouting's integer clearance check leaves overlaps of a few hundredths of a mil
         // on copper that actually meets clearance; those are rounding noise, not violations.
-        assertFalse(ClearanceViolations.is_reportable(false, 0.0));
-        assertFalse(ClearanceViolations.is_reportable(false, 0.499));
-        assertFalse(ClearanceViolations.is_reportable(false,
-                Math.nextDown(ClearanceViolations.MIN_REPORTED_OVERLAP_MIL)));
+        assertFalse(ClearanceViolations.is_reportable(false, false, 0.0));
+        assertFalse(ClearanceViolations.is_reportable(false, false, 0.499));
+        assertFalse(ClearanceViolations.is_reportable(false, false, Math.nextDown(ClearanceViolations.MIN_REPORTED_OVERLAP_MIL)));
     }
 
     @Test
     public void different_net_overlaps_at_or_above_the_rounding_floor_are_reportable()
     {
-        assertTrue(ClearanceViolations.is_reportable(false, ClearanceViolations.MIN_REPORTED_OVERLAP_MIL));
-        assertTrue(ClearanceViolations.is_reportable(false, 5.0));
-        assertTrue(ClearanceViolations.is_reportable(false, 1000.0));
+        assertTrue(ClearanceViolations.is_reportable(false, false, ClearanceViolations.MIN_REPORTED_OVERLAP_MIL));
+        assertTrue(ClearanceViolations.is_reportable(false, false, 5.0));
+        assertTrue(ClearanceViolations.is_reportable(false, false, 1000.0));
     }
 
     // --- pair_key ----------------------------------------------------------------------------
@@ -101,5 +100,26 @@ public class ClearanceViolationsTest
         // keep them apart.
         assertFalse(ClearanceViolations.pair_key(1, 23, 4).equals(ClearanceViolations.pair_key(12, 3, 4)));
         assertFalse(ClearanceViolations.pair_key(1, 2, 34).equals(ClearanceViolations.pair_key(1, 23, 4)));
+    }
+
+    /**
+     * Same-component pads are exempt however far short they fall. A footprint's internal pad
+     * spacing is fixed by the part, so there is nothing layout could do about it - and without
+     * this, every multi-row connector reports one violation per adjacent pad pair.
+     */
+    @Test
+    public void same_component_pairs_are_never_reportable()
+    {
+        assertFalse(ClearanceViolations.is_reportable(false, true, 1000.0));
+        assertFalse(ClearanceViolations.is_reportable(false, true, 2.5));
+        assertFalse(ClearanceViolations.is_reportable(false, true,
+                ClearanceViolations.MIN_REPORTED_OVERLAP_MIL));
+    }
+
+    /** Different components at the same shortfall ARE reportable - the exemption is narrow. */
+    @Test
+    public void different_component_pairs_are_still_reportable()
+    {
+        assertTrue(ClearanceViolations.is_reportable(false, false, 2.5));
     }
 }
