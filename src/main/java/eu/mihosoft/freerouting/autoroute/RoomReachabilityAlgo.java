@@ -250,15 +250,29 @@ final class RoomReachabilityAlgo
      * it can show up in a room's target-door list at all) and, if it is a {@code Pin}, neck-down
      * relaxation (see {@link #neck_down_may_apply}) does not apply to it.
      */
+    /**
+     * True if every item can be modelled by this check, i.e. is {@link Connectable} and so can
+     * appear in a room's target-door list.
+     *
+     * <p>This used also to bail out whenever neck-down might apply to a pin, on the theory that
+     * a static full-width check could wrongly call a narrow pad unreachable. That exemption was
+     * removed because the premise was false: NOTHING in this algorithm is width-sensitive. The
+     * rooms are grown from get_trace_connection_shape over the per-clearance-class autoroute
+     * tree, which is keyed on clearance class alone, and the flood fill only walks doors. The
+     * trace-width gate lives in MazeSearchAlgo.expand_to_room_doors - door_is_small(door,
+     * 2 * half_width_add) - which this never calls, and which is exactly where neck-down's own
+     * relaxation already applies.
+     *
+     * <p>The cost of the exemption was severe: on the reference board it skipped 2346 of 2885
+     * checks, because neck-down is on by default and
+     * {@code Pin.get_trace_neckdown_halfwidth} returns a positive value for essentially every
+     * pad smaller than the trace. Four fifths of connections could not be assessed at all.
+     */
     private static boolean all_examinable(Set<Item> p_items, AutorouteControl p_ctrl)
     {
         for (Item curr_item : p_items)
         {
             if (!(curr_item instanceof Connectable))
-            {
-                return false;
-            }
-            if (neck_down_may_apply(curr_item, p_ctrl))
             {
                 return false;
             }
