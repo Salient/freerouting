@@ -26,3 +26,6 @@ bin/
 /target.*
 
 
+
+# codegraph plugin index, machine-local
+.codegraph/
