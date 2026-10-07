@@ -12,6 +12,9 @@ import eu.mihosoft.freerouting.board.SearchTreeObject;
 import eu.mihosoft.freerouting.geometry.planar.TileShape;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Covers {@link RoomReachabilityAlgo#flood_fill}, the pure breadth-first search over the
@@ -225,6 +228,131 @@ public class RoomReachabilityAlgoTest
                 NO_OP_EXPANDER, 1000, () -> false);
 
         assertEquals(RoomReachabilityAlgo.FloodResult.FOUND, result);
+    }
+
+    /**
+     * The activity summary must account for every attempted check, and its "proved none" must
+     * equal what {@link RoomReachabilityAlgo#proved_blocked_count} claims.
+     *
+     * <p>This is the regression for a reporting bug that produced a self-contradictory log on
+     * the 6-layer reference board: "0 proved none" in the same run whose BoardScore line said
+     * "12 of which are provably unroutable". "Proved none" was derived as
+     * (completed - corridor - out_of_budget), which only ever sees the EXHAUSTED branch, while
+     * PAD_UNREACHABLE returns BEFORE checks_completed is incremented. So the 12 pad-unreachable
+     * verdicts were invisible here and, worse, were silently counted as "not modellable",
+     * overstating the coverage gap by exactly the number of connections the check had in fact
+     * succeeded in proving blocked.
+     *
+     * <p>Driven through the real {@code check()} entry point rather than by poking the counters,
+     * so the increments must actually sit at the return sites. An empty destination set takes
+     * the earliest bail-out, which is the one case reachable without a board.
+     */
+    @Test
+    public void activity_summary_accounts_for_every_attempted_check()
+    {
+        RoomReachabilityAlgo.reset_activity();
+        try
+        {
+            assertNull("summary must be null before any check runs",
+                    RoomReachabilityAlgo.activity_summary());
+
+            // Empty destination set: returns REACHABLE at the top of check(), before anything
+            // that needs an engine, so this counts an attempt and nothing else.
+            for (int i = 0; i < 3; ++i)
+            {
+                RoomReachabilityAlgo.check(Collections.<eu.mihosoft.freerouting.board.Item>emptySet(),
+                        Collections.<eu.mihosoft.freerouting.board.Item>emptySet(), null, null);
+            }
+
+            String summary = RoomReachabilityAlgo.activity_summary();
+            assertNotNull("summary must exist once a check has been attempted", summary);
+            assertTrue("summary should report the 3 attempts, got: " + summary,
+                    summary.contains("3 attempted"));
+            // The whole point: no blocked verdicts were reached, so both the summary's
+            // "proved none" and the accessor must say zero, and they must agree.
+            assertEquals("no blocked verdict was reached", 0,
+                    RoomReachabilityAlgo.proved_blocked_count());
+            assertTrue("with no blocked verdicts the summary must say 0 proved none, got: "
+                    + summary, summary.contains("0 proved none"));
+            // Every attempt is accounted for in exactly one bucket.
+            assertTrue("all 3 unmodellable attempts must be reported as such, got: " + summary,
+                    summary.contains("3 not modellable"));
+        }
+        finally
+        {
+            RoomReachabilityAlgo.reset_activity();
+        }
+    }
+
+    /**
+     * The actual regression, using the real counter values from the 6-layer reference board run
+     * that exposed the bug: 3021 attempted, 2614 corridor, 386 out of budget, and 12 blocked --
+     * all 12 of them PAD_UNREACHABLE, none EXHAUSTED.
+     *
+     * <p>The old derived formula (completed - corridor - out_of_budget) computes
+     * 3000 - 2614 - 386 = 0 for these inputs and prints "0 proved none" while BoardScore prints
+     * "12 provably unroutable" -- and it also reports 21 not modellable when the true figure is
+     * 9, because the 12 pad verdicts fall into that bucket by subtraction. Both numbers wrong
+     * from one missing counter.
+     *
+     * <p>Driven through {@code format_summary} rather than {@code check()} on purpose:
+     * PAD_UNREACHABLE needs a real board, so this is the only level at which the arithmetic is
+     * reachable. This test fails against the derived version and passes against the counted one.
+     */
+    @Test
+    public void proved_none_counts_pad_unreachable_verdicts_not_just_exhausted_fills()
+    {
+        // 3021 attempted = 2614 corridor + 386 budget + 12 pad-unreachable + 9 not modellable.
+        // completed = 3000, i.e. the 3021 minus the 12 early pad returns and 9 early bail-outs.
+        String summary = RoomReachabilityAlgo.format_summary(3021, 3000, 2614, 386, 12, 0);
+
+        assertTrue("the 12 PAD_UNREACHABLE verdicts must be reported as proved, not as zero."
+                + " Got: " + summary, summary.contains("12 proved none"));
+        assertTrue("and attributed to the no-free-space case. Got: " + summary,
+                summary.contains("12 no free space at the destination pad"));
+        // The second half of the same bug: those 12 must not also be counted as unexamined.
+        assertTrue("not-modellable must be 9, not 21 -- the 12 blocked verdicts were examined"
+                + " successfully and must not inflate the coverage gap. Got: " + summary,
+                summary.contains("9 not modellable"));
+    }
+
+    /** The same arithmetic with the verdicts the other way round, so neither bucket is hard-coded. */
+    @Test
+    public void proved_none_counts_exhausted_fills_too()
+    {
+        // 100 attempted, 50 corridor, 10 budget, 0 pad-unreachable, 40 sealed-pocket.
+        // All 100 reached the fill, so completed == 100 and not-modellable is 0.
+        String summary = RoomReachabilityAlgo.format_summary(100, 100, 50, 10, 0, 40);
+
+        assertTrue("got: " + summary, summary.contains("40 proved none"));
+        assertTrue("got: " + summary, summary.contains("40 free space but no corridor out"));
+        assertTrue("got: " + summary, summary.contains("0 not modellable"));
+    }
+
+    /**
+     * "Proved none" must break the two blocked verdicts out separately, because they call for
+     * different action: PAD_UNREACHABLE means the pad has no free space beside it at all
+     * (placement or a clearance rule is wrong), while NO_CORRIDOR means free space exists but is
+     * walled in (a routing-order or ripup-permission problem). A single lumped total hid which.
+     */
+    @Test
+    public void summary_distinguishes_the_two_blocked_verdicts()
+    {
+        RoomReachabilityAlgo.reset_activity();
+        try
+        {
+            RoomReachabilityAlgo.check(Collections.<eu.mihosoft.freerouting.board.Item>emptySet(),
+                    Collections.<eu.mihosoft.freerouting.board.Item>emptySet(), null, null);
+            String summary = RoomReachabilityAlgo.activity_summary();
+            assertTrue("summary must name the no-free-space case, got: " + summary,
+                    summary.contains("no free space at the destination pad"));
+            assertTrue("summary must name the sealed-pocket case, got: " + summary,
+                    summary.contains("free space but no corridor out"));
+        }
+        finally
+        {
+            RoomReachabilityAlgo.reset_activity();
+        }
     }
 
     /**

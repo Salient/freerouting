@@ -121,6 +121,19 @@ final class RoomReachabilityAlgo
     private static int checks_completed = 0;
     private static int fills_found_a_corridor = 0;
     private static int fills_out_of_budget = 0;
+    /**
+     * The two BLOCKED verdicts, counted where each is returned.
+     *
+     * <p>These are separate counters, and counted directly rather than derived, because of a
+     * reporting bug they exist to make impossible. PAD_UNREACHABLE returns early -- before the
+     * flood fill runs and so before checks_completed is incremented -- while "proved none" used
+     * to be computed as (completed - corridor - out_of_budget), i.e. from the EXHAUSTED branch
+     * alone. A board whose blocked connections were all PAD_UNREACHABLE therefore reported
+     * "0 proved none" in the same run that BoardScore reported 12 provably unroutable: both
+     * numbers correct, the pair incoherent, and no way to tell from the log which was which.
+     */
+    private static int pads_with_no_free_space = 0;
+    private static int fills_found_no_corridor = 0;
 
     /** One line for the end-of-run report. Null when the check never ran at all. */
     public static String activity_summary()
@@ -129,17 +142,46 @@ final class RoomReachabilityAlgo
         {
             return null;
         }
-        int bailed_before_fill = checks_attempted - checks_completed;
-        return "Reachability checks: " + checks_attempted + " attempted, "
-                + fills_found_a_corridor + " found a corridor, "
-                + (checks_completed - fills_found_a_corridor - fills_out_of_budget)
-                + " proved none, " + fills_out_of_budget + " ran out of budget (room cap "
+        return format_summary(checks_attempted, checks_completed, fills_found_a_corridor,
+                fills_out_of_budget, pads_with_no_free_space, fills_found_no_corridor);
+    }
+
+    /**
+     * The summary line as a pure function of the counters, so the bucket arithmetic can be
+     * tested without a board. {@code check()} is unreachable in a unit test for every verdict
+     * except the earliest bail-out -- PAD_UNREACHABLE in particular needs a real
+     * {@code AutorouteEngine} and search tree -- so testing only through {@code check()} left
+     * the arithmetic here effectively uncovered, which is how the derived "proved none" shipped.
+     */
+    static String format_summary(int p_attempted, int p_completed, int p_found_corridor,
+            int p_out_of_budget, int p_pad_unreachable, int p_no_corridor)
+    {
+        // Everything that did not reach the fill: the not-modellable bail-outs, the
+        // stop-requested bail-outs, AND the PAD_UNREACHABLE verdicts, which return early.
+        int not_modellable = p_attempted - p_completed - p_pad_unreachable;
+        return "Reachability checks: " + p_attempted + " attempted, "
+                + p_found_corridor + " found a corridor, "
+                + (p_pad_unreachable + p_no_corridor) + " proved none ("
+                + p_pad_unreachable + " no free space at the destination pad, "
+                + p_no_corridor + " free space but no corridor out), "
+                + p_out_of_budget + " ran out of budget (room cap "
                 + MAX_ROOMS + ", " + TIME_LIMIT_MILLISECONDS + "ms), "
-                + bailed_before_fill + " not modellable."
-                + (fills_out_of_budget > 0
+                + not_modellable + " not modellable."
+                + (p_out_of_budget > 0
                     ? " Budget exhaustion means those connections were NOT proven routable,"
                         + " only not proven blocked."
                     : "");
+    }
+
+    /**
+     * How many checks returned a BLOCKED verdict this run, i.e. the number this class claims to
+     * have proven unroutable. Should agree with the blocked count BoardScore reports, modulo
+     * connections blocked once and then skipped on later passes from the registry rather than
+     * re-checked here.
+     */
+    static int proved_blocked_count()
+    {
+        return pads_with_no_free_space + fills_found_no_corridor;
     }
 
     /** Resets the counters, so each batch run reports its own activity. */
@@ -149,6 +191,8 @@ final class RoomReachabilityAlgo
         checks_completed = 0;
         fills_found_a_corridor = 0;
         fills_out_of_budget = 0;
+        pads_with_no_free_space = 0;
+        fills_found_no_corridor = 0;
     }
 
     static final int MAX_ROOMS = 2000;
@@ -211,6 +255,7 @@ final class RoomReachabilityAlgo
         }
         if (!pad_reachable)
         {
+            ++pads_with_no_free_space;
             return Verdict.PAD_UNREACHABLE;
         }
 
@@ -237,6 +282,7 @@ final class RoomReachabilityAlgo
                 ++fills_out_of_budget;
                 return Verdict.REACHABLE;
             case EXHAUSTED:
+                ++fills_found_no_corridor;
                 return Verdict.NO_CORRIDOR;
             default:
                 // Unreachable, but fail open rather than throw if a new enum value ever appears.
