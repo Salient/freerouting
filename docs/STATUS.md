@@ -42,6 +42,23 @@ Altium import, with clearances from `Constraints.xml`.
 Baseline to beat on the reference board: 10,526 wires, 1,031 vias, 186 closed
 loops, 0 degenerate wires.
 
+**Measured 2026-10-14** on `b500-v3.frpcb.json` + `Constraints-v3.xml` (the
+newest full export on disk; predates the pad-rotation fix, so violation counts
+are not comparable to the v6 figures in the table above):
+
+| Run | Result |
+|---|---|
+| `-rm verify` | 43 air lines, 591 violations (+1361 under the 0.5 mil floor), 46s |
+| `-rm finish -mt 180` | **incomplete=0**, vias=1031, length 89.1M, corners 28742, 3m29s |
+| `.rte` produced | 10,520 wires, 1031 vias, 186 loops, 0 degenerate, 0 out-of-range |
+| from scratch (`-rm reroute -mt 600`, stripped board) | incomplete=167 (9 provably unroutable), vias=402, 10m02s |
+
+Postroute optimize earned its keep in finish mode: trace length 96.7M → 89.1M
+(−7.9%) for +4 corners and no via change.
+
+**CPU stayed at 113% across both long runs** — the single-core ceiling is
+reproducible, and is the case for the parallel work below.
+
 Standing regression:
 
 ```
@@ -99,21 +116,32 @@ corrupt each other silently.
   current-carrying copper on a high-voltage board arbitrarily.
 
 ### Known board issues, not yet diagnosed
-- **290 of the 825 remaining violations are board-outline against a 100 mil
-  rule.** Suspected `CHASSIS` over-constraint from FRPCB flattening edge
-  clearance to a single scalar.
+- **Residual violations are pad-adjacency, NOT board outline.** Measured on the
+  v3 export 2026-10-14: 591 reported (plus 1361 under the 0.5 mil floor), and
+  **zero** involve the board outline. An earlier note here claimed 290 were
+  outline-vs-copper against a 100 mil rule and blamed `CHASSIS` flattening —
+  that was wrong. The actual split by rule is 290 at 8 mil and 289 at 10 mil,
+  and by item pairing: Pin-vs-Trace 281, Via-vs-Via 162, Pin-vs-Via 93. Median
+  overlap 1.23 mil, 450 of 591 under 2 mil. Top Layer carries 307, Bottom 161.
+  So this is a fine-grained clearance problem around pads and vias — the
+  hypothesis to test is whether the pad/via clearance compensation in the
+  autoroute tree is a fraction of a mil short, not anything about edges.
 - **11 pad collisions at 45°/135°/200°** (Q8, U26). The orthogonal case is
   fixed; these non-orthogonal pads are a separate mechanism.
 - **J5's own pads overlap by 1–2 mil** on a 10 mil rule near (11810, 13300).
   Pre-existing in the source board — for the user's eye, not a tool bug.
 
 ### Reachability check — residual gap
-`RoomReachabilityAlgo` now models ~99% of connections (was ~19%). On the
-stripped board: 3021 attempted, 2614 found a corridor, 12 proved blocked, 9 not
-modellable, and **386 ran out of budget** — now the dominant gap. Caps are
+`RoomReachabilityAlgo` now models >99% of connections (was ~19%). Re-measured
+2026-10-14 on the stripped board at a 600s budget: 2715 attempted, 2369 found a
+corridor, 9 proved blocked (all 9 "no free space at the destination pad"), 9 not
+modellable, and **328 ran out of budget** — the dominant remaining gap. Caps are
 `MAX_ROOMS = 2000` (line 198) and `TIME_LIMIT_MILLISECONDS = 500` (line 218).
 Budget exhaustion fails open (reports reachable), so raising these can only find
 more blocked connections, never create false positives.
+
+The blocked count reconciles with `BoardScore` now ("9 proved none" alongside
+"9 of which are provably unroutable"); the two disagreed before `d3cbc820`.
 
 ### Lower priority
 - Port the Constraints.xml reader to the sibling `reerouting` /
